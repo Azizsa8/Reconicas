@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from . import dashboard as _dashboard
 from . import db as _db
 from .digest import deliver_digests
 from .plans import PLANS
@@ -95,6 +96,10 @@ def cmd_run_all(args) -> None:
     cmd_digest(args)
 
 
+def cmd_dashboard(args) -> None:
+    _dashboard.serve(args.db, host=args.host, port=args.port)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="reconicas", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -144,6 +149,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_db_arg(p)
     p.add_argument("--workers", type=int, default=3)
     p.set_defaults(func=cmd_run_all)
+
+    p = sub.add_parser("dashboard", help="Serve the read-only web dashboard")
+    _add_db_arg(p)
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8000)
+    p.set_defaults(func=cmd_dashboard)
 
     return parser
 
