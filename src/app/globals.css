@@ -1,26 +1,193 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Calm warm-off-white canvas — from PRD-00 design system */
+  --bg-canvas: #FAFAF7;
+  --bg-surface: #FFFFFF;
+  --bg-elevated: #F4F4EE;
+
+  --fg-primary: #0E1116;
+  --fg-muted: #52606D;
+
+  --accent: #1F6FEB;
+  --accent-fg: #FFFFFF;
+
+  --success: #1F883D;
+  --warning: #9A6700;
+  --danger: #CF222E;
+
+  --border: #E1E4E8;
+  --ring: rgba(31, 111, 235, 0.4);
+}
+
+.dark {
+  --bg-canvas: #0E1116;
+  --bg-surface: #171A21;
+  --bg-elevated: #1E222A;
+
+  --fg-primary: #E8EAED;
+  --fg-muted: #8E96A4;
+
+  --accent: #4f9bff;
+  --accent-fg: #0E1116;
+
+  --success: #2EA043;
+  --warning: #E3B341;
+  --danger: #F85149;
+
+  --border: #262B33;
+  --ring: rgba(79, 155, 255, 0.4);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg-canvas: var(--bg-canvas);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-fg-primary: var(--fg-primary);
+  --color-fg-muted: var(--fg-muted);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-border: var(--border);
+  --font-sans: "Inter", "Tajawal", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html, body {
+  background: var(--bg-canvas);
+  color: var(--fg-primary);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Tabular numerals everywhere prices/counts appear */
+.tabular-nums, table, .stat, .price {
+  font-variant-numeric: tabular-nums;
+}
+
+/* RTL flips */
+[dir="rtl"] {
+  font-family: "Tajawal", "Inter", system-ui, sans-serif;
+}
+
+/* Visible focus ring on every interactive control */
+*:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Custom button base */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-weight: 500;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0.625rem 1rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: background 150ms ease-out, border-color 150ms ease-out, opacity 150ms ease-out;
+  cursor: pointer;
+  user-select: none;
+}
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-primary { background: var(--accent); color: var(--accent-fg); }
+.btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, black); }
+.btn-secondary { background: var(--bg-surface); color: var(--fg-primary); border-color: var(--border); }
+.btn-secondary:hover:not(:disabled) { background: var(--bg-elevated); }
+.btn-lg { padding: 0.75rem 1.25rem; font-size: 15px; }
+
+.input {
+  width: 100%;
+  padding: 0.625rem 0.875rem;
+  background: var(--bg-surface);
+  color: var(--fg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.input[aria-invalid="true"] { border-color: var(--danger); }
+.input:read-only, .input:disabled { background: var(--bg-elevated); }
+
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.card-lg {
+  box-shadow: 0 10px 24px -6px rgba(14, 17, 22, 0.08), 0 4px 8px -4px rgba(14, 17, 22, 0.06);
+}
+
+.label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-primary);
+  margin-bottom: 0.375rem;
+}
+.helper {
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-top: 0.375rem;
+}
+.helper-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin-top: 0.375rem;
+}
+
+.banner {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  font-size: 13px;
+  border: 1px solid;
+}
+.banner-danger {
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+  color: var(--danger);
+}
+.banner-success {
+  background: color-mix(in srgb, var(--success) 10%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--success) 30%, var(--border));
+  color: var(--success);
+}
+
+.divider-or {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin: 1rem 0;
+}
+.divider-or::before, .divider-or::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* Logo R glyph */
+.brand-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--fg-primary);
+  color: var(--bg-canvas);
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -0.02em;
 }
