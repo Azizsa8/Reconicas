@@ -117,21 +117,13 @@ export async function loginAction(formData: FormData): Promise<AuthResult> {
   redirect("/app");
 }
 
-export async function logoutAction() {
-  let supabase;
+export async function logoutAction(): Promise<void> {
   try {
-    supabase = await getServerSupabase();
-  } catch (e) {
-    if ((e as Error & { code?: string }).code === "SUPABASE_NOT_CONFIGURED") {
-      return {
-        ok: false,
-        error:
-          "Auth backend not configured yet — we're wiring it now. Check back in a few minutes.",
-      };
-    }
-    throw e;
+    const supabase = await getServerSupabase();
+    await supabase.auth.signOut();
+  } catch {
+    // Supabase unconfigured or signout failed — proceed to /login either way.
   }
-  await supabase.auth.signOut();
   redirect("/login");
 }
 
