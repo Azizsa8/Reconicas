@@ -27,7 +27,19 @@ export async function signupAction(formData: FormData): Promise<AuthResult> {
   if (!workspace) return { ok: false, error: "Workspace name is required.", field: "workspace" };
   if (!accepted) return { ok: false, error: "You must accept the terms to continue." };
 
-  const supabase = await getServerSupabase();
+  let supabase;
+  try {
+    supabase = await getServerSupabase();
+  } catch (e) {
+    if ((e as Error & { code?: string }).code === "SUPABASE_NOT_CONFIGURED") {
+      return {
+        ok: false,
+        error:
+          "Auth backend not configured yet — we're wiring it now. Check back in a few minutes.",
+      };
+    }
+    throw e;
+  }
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
@@ -83,7 +95,19 @@ export async function loginAction(formData: FormData): Promise<AuthResult> {
     return { ok: false, error: "Email and password are required." };
   }
 
-  const supabase = await getServerSupabase();
+  let supabase;
+  try {
+    supabase = await getServerSupabase();
+  } catch (e) {
+    if ((e as Error & { code?: string }).code === "SUPABASE_NOT_CONFIGURED") {
+      return {
+        ok: false,
+        error:
+          "Auth backend not configured yet — we're wiring it now. Check back in a few minutes.",
+      };
+    }
+    throw e;
+  }
   const { error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
@@ -94,7 +118,19 @@ export async function loginAction(formData: FormData): Promise<AuthResult> {
 }
 
 export async function logoutAction() {
-  const supabase = await getServerSupabase();
+  let supabase;
+  try {
+    supabase = await getServerSupabase();
+  } catch (e) {
+    if ((e as Error & { code?: string }).code === "SUPABASE_NOT_CONFIGURED") {
+      return {
+        ok: false,
+        error:
+          "Auth backend not configured yet — we're wiring it now. Check back in a few minutes.",
+      };
+    }
+    throw e;
+  }
   await supabase.auth.signOut();
   redirect("/login");
 }
@@ -105,7 +141,19 @@ export async function forgotPasswordAction(formData: FormData): Promise<AuthResu
     // Still return success — enumeration safety.
     return { ok: true };
   }
-  const supabase = await getServerSupabase();
+  let supabase;
+  try {
+    supabase = await getServerSupabase();
+  } catch (e) {
+    if ((e as Error & { code?: string }).code === "SUPABASE_NOT_CONFIGURED") {
+      return {
+        ok: false,
+        error:
+          "Auth backend not configured yet — we're wiring it now. Check back in a few minutes.",
+      };
+    }
+    throw e;
+  }
   // Fire-and-forget — we don't surface whether the email exists.
   try {
     await supabase.auth.resetPasswordForEmail(email, {

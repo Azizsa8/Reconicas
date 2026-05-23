@@ -8,9 +8,11 @@ export async function getServerSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anon) {
-    throw new Error(
-      "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY — set them in .env.local"
-    );
+    // Signal to callers (auth actions) that Supabase isn't wired yet — they
+    // turn this into a friendly inline banner instead of a 500.
+    const err = new Error("SUPABASE_NOT_CONFIGURED");
+    (err as Error & { code?: string }).code = "SUPABASE_NOT_CONFIGURED";
+    throw err;
   }
   return createServerClient(url, anon, {
     cookies: {
