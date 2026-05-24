@@ -6,7 +6,10 @@ import { cookies } from "next/headers";
 export async function getServerSupabase() {
   const cookieStore = await cookies();
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  // New Supabase key naming (sb_publishable_*) with fallback to legacy anon JWT.
+  const anon =
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anon) {
     // Signal to callers (auth actions) that Supabase isn't wired yet — they
     // turn this into a friendly inline banner instead of a 500.
