@@ -56,31 +56,19 @@ export async function signupAction(formData: FormData): Promise<AuthResult> {
     return { ok: false, error: error.message };
   }
 
-  // Create initial tenant for this user (best-effort — if RLS rejects, we'll
-  // re-try from the dashboard on first load).
+  // Provision the initial tenant atomically via a SECURITY DEFINER RPC.
+  // (Direct INSERT into tenants/memberships hits the chicken-and-egg of
+  //  RLS requiring existing membership — the RPC bypasses RLS for this
+  //  one privileged provisioning step. See supabase/fix_signup_function.sql.)
   if (data.user) {
     const slug = randomTenantSlug();
     try {
-      await supabase.from("tenants").insert({
-        slug,
-        display_name: workspace,
-        owner_user_id: data.user.id,
+      await supabase.rpc("create_tenant_for_current_user", {
+        p_slug: slug,
+        p_display_name: workspace,
       });
-      // Membership row
-      const { data: tenant } = await supabase
-        .from("tenants")
-        .select("id")
-        .eq("slug", slug)
-        .single();
-      if (tenant) {
-        await supabase.from("memberships").insert({
-          tenant_id: tenant.id,
-          user_id: data.user.id,
-          role: "admin",
-        });
-      }
     } catch {
-      // RLS or table-not-ready — handled at next dashboard load.
+      // Best-effort — we'll re-attempt on the next dashboard load if it failed.
     }
   }
 

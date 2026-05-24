@@ -59,26 +59,23 @@ async function main() {
     return;
   }
 
-  // 2. Insert a tenant
+  // 2. Provision tenant + membership atomically via the RPC
   const slug = `smoke-${unique()}`.slice(0, 50);
-  const { data: tenant, error: e2 } = await supa
-    .from("tenants")
-    .insert({
-      slug,
-      display_name: workspaceName,
-      owner_user_id: signup.user.id,
-    })
-    .select()
-    .single();
-  ok("insert tenants (RLS allows owner)", !e2 && !!tenant, e2?.message);
-
-  // 3. Insert membership
-  const { error: e3 } = await supa.from("memberships").insert({
-    tenant_id: tenant.id,
-    user_id: signup.user.id,
-    role: "admin",
-  });
-  ok("insert memberships", !e3, e3?.message);
+  const { data: tenantId, error: e2 } = await supa.rpc(
+    "create_tenant_for_current_user",
+    { p_slug: slug, p_display_name: workspaceName }
+  );
+  ok(
+    "provision tenant via RPC (SECURITY DEFINER)",
+    !e2 && !!tenantId,
+    e2?.message || `tenant_id=${tenantId}`
+  );
+  if (!tenantId) {
+    console.log("\n⚠ Stopping — RPC didn't return a tenant_id.");
+    return;
+  }
+  // Shape it like the original `tenant` row so downstream code works.
+  const tenant = { id: tenantId };
 
   // 4. Sign out
   await supa.auth.signOut();
