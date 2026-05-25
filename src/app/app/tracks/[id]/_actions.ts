@@ -7,6 +7,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getServerSupabase } from "@/lib/supabase/server";
 import { scrapeUrl } from "@/lib/scrape";
+import { evaluateConditionsForScrape } from "@/lib/conditions/engine";
 
 async function authedSupabase() {
   const supabase = await getServerSupabase();
@@ -28,19 +29,35 @@ export async function runNowAction(trackId: number) {
 
   const record = await scrapeUrl(track.url, { timeoutMs: 15000 });
 
-  await supabase.from("scrapes").insert({
-    track_id: trackId,
-    ok: record.ok,
-    tier: record.source_tier,
-    payload: record,
-  });
+  const { data: inserted } = await supabase
+    .from("scrapes")
+    .insert({
+      track_id: trackId,
+      ok: record.ok,
+      tier: record.source_tier,
+      payload: record,
+    })
+    .select("id")
+    .single();
+
   await supabase
     .from("tracks")
     .update({ last_run_at: new Date().toISOString() })
     .eq("id", trackId);
 
+  let alerts_fired = 0;
+  if (inserted?.id && record.ok) {
+    const r = await evaluateConditionsForScrape(supabase, {
+      track_id: trackId,
+      scrape_id: inserted.id,
+      current_payload: record as unknown as Record<string, unknown>,
+    });
+    alerts_fired = r.fired;
+  }
+
   revalidatePath(`/app/tracks/${trackId}`);
-  return { ok: true };
+  if (alerts_fired > 0) revalidatePath("/app/alerts");
+  return { ok: true, alerts_fired };
 }
 
 export async function setTrackEnabledAction(trackId: number, enabled: boolean) {
