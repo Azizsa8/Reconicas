@@ -1,0 +1,209 @@
+// Alert delivery dispatch.
+//
+// Given a set of alert IDs that just fired, look up the tenant's enabled
+// channels and attempt one delivery per (alert, channel) pair. Each attempt
+// inserts a `deliveries` row recording ok / status_code / detail. Errors
+// never throw — we always record SOMETHING so the audit log is complete.
+//
+// Stable contract: webhooks receive `reconcart.alert/v1` payloads (same shape
+// the Add Channel modal preview shows). Email/console channels record a
+// receipt row but no SMTP/log integration is wired yet — they'll light up
+// when those backends ship.
+
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+type ChannelKind = "webhook" | "email" | "console";
+
+type ChannelRow = {
+  id: number;
+  tenant_id: string;
+  kind: ChannelKind;
+  target: string;
+  enabled: boolean;
+};
+
+type AlertJoin = {
+  id: number;
+  fired_at: string;
+  explanation: string;
+  scrape_id: number;
+  condition_id: number;
+  conditions: {
+    label: string | null;
+    expression: string | null;
+    track_id: number;
+    tracks: {
+      id: number;
+      url: string;
+      tenant_id: string;
+    };
+  };
+  scrapes: { payload: Record<string, unknown> } | null;
+};
+
+export type DispatchResult = {
+  attempted: number;
+  delivered: number;
+  failed: number;
+};
+
+const WEBHOOK_TIMEOUT_MS = 10_000;
+
+export async function dispatchAlerts(
+  supabase: SupabaseClient,
+  alertIds: number[],
+): Promise<DispatchResult> {
+  if (alertIds.length === 0) {
+    return { attempted: 0, delivered: 0, failed: 0 };
+  }
+
+  const { data: alertRows } = await supabase
+    .from("alerts")
+    .select(
+      `id, fired_at, explanation, scrape_id, condition_id,
+       conditions!inner(label, expression, track_id,
+         tracks!inner(id, url, tenant_id)),
+       scrapes(payload)`,
+    )
+    .in("id", alertIds);
+  const alerts = ((alertRows ?? []) as unknown) as AlertJoin[];
+  if (alerts.length === 0) return { attempted: 0, delivered: 0, failed: 0 };
+
+  // Group alerts by tenant so we batch-fetch channels.
+  const tenantIds = Array.from(new Set(alerts.map((a) => a.conditions.tracks.tenant_id)));
+  const { data: channelRows } = await supabase
+    .from("delivery_channels")
+    .select("id, tenant_id, kind, target, enabled")
+    .in("tenant_id", tenantIds)
+    .eq("enabled", true);
+  const channels = (channelRows ?? []) as ChannelRow[];
+  if (channels.length === 0) return { attempted: 0, delivered: 0, failed: 0 };
+
+  const channelsByTenant = new Map<string, ChannelRow[]>();
+  for (const c of channels) {
+    const list = channelsByTenant.get(c.tenant_id) ?? [];
+    list.push(c);
+    channelsByTenant.set(c.tenant_id, list);
+  }
+
+  type Attempt = {
+    alert_id: number;
+    channel_id: number;
+    ok: boolean;
+    status_code: number | null;
+    detail: string;
+  };
+  const attempts: Attempt[] = [];
+
+  for (const alert of alerts) {
+    const channelsForTenant = channelsByTenant.get(alert.conditions.tracks.tenant_id) ?? [];
+    if (channelsForTenant.length === 0) continue;
+    const payload = buildPayload(alert);
+
+    // Run a tenant's channels in parallel — they're independent network calls.
+    const tenantAttempts = await Promise.all(
+      channelsForTenant.map(async (ch) => attemptOne(ch, alert.id, payload)),
+    );
+    attempts.push(...tenantAttempts);
+  }
+
+  if (attempts.length === 0) return { attempted: 0, delivered: 0, failed: 0 };
+
+  await supabase.from("deliveries").insert(attempts);
+
+  const delivered = attempts.filter((a) => a.ok).length;
+  return {
+    attempted: attempts.length,
+    delivered,
+    failed: attempts.length - delivered,
+  };
+}
+
+function buildPayload(alert: AlertJoin) {
+  const snap = (alert.scrapes?.payload ?? {}) as {
+    name?: string;
+    brand?: string;
+    price?: number | null;
+    currency?: string | null;
+    availability?: string | null;
+    platform_detected?: string | null;
+  };
+  return {
+    type: "reconcart.alert/v1",
+    sent_at: new Date().toISOString(),
+    alert: {
+      id: alert.id,
+      label: alert.conditions.label,
+      expression: alert.conditions.expression,
+      fired_at: alert.fired_at,
+      explanation: alert.explanation,
+    },
+    track: {
+      id: alert.conditions.tracks.id,
+      url: alert.conditions.tracks.url,
+      product_name: snap.name ?? null,
+      brand: snap.brand ?? null,
+      platform: snap.platform_detected ?? null,
+    },
+    snapshot: {
+      price: snap.price ?? null,
+      currency: snap.currency ?? null,
+      availability: snap.availability ?? null,
+    },
+  };
+}
+
+async function attemptOne(
+  channel: ChannelRow,
+  alert_id: number,
+  payload: ReturnType<typeof buildPayload>,
+): Promise<{
+  alert_id: number;
+  channel_id: number;
+  ok: boolean;
+  status_code: number | null;
+  detail: string;
+}> {
+  const base = { alert_id, channel_id: channel.id };
+
+  if (channel.kind === "webhook") {
+    try {
+      const res = await fetch(channel.target, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+      });
+      return {
+        ...base,
+        ok: res.ok,
+        status_code: res.status,
+        detail: `${res.status} ${res.statusText}`,
+      };
+    } catch (e) {
+      return {
+        ...base,
+        ok: false,
+        status_code: null,
+        detail: e instanceof Error ? e.message : "network error",
+      };
+    }
+  }
+
+  if (channel.kind === "console") {
+    console.log(
+      "[reconcart.alert]",
+      JSON.stringify({ channel: channel.id, alert: alert_id, payload }),
+    );
+    return { ...base, ok: true, status_code: null, detail: "logged to server console" };
+  }
+
+  // email — SMTP not wired yet. Record the attempt so the audit log is
+  // honest about what didn't ship.
+  return {
+    ...base,
+    ok: false,
+    status_code: null,
+    detail: "email backend not configured — delivery skipped",
+  };
+}

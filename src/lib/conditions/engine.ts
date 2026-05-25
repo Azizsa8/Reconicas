@@ -8,6 +8,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildContext } from "./context";
 import { evaluate } from "./evaluate";
+import { dispatchAlerts, type DispatchResult } from "@/lib/delivery/dispatch";
 
 export type EngineResult = {
   scrape_id: number;
@@ -15,6 +16,7 @@ export type EngineResult = {
   fired: number;
   alert_ids: number[];
   errors: Array<{ condition_id: number; error: string }>;
+  dispatch: DispatchResult;
 };
 
 export async function evaluateConditionsForScrape(
@@ -85,11 +87,14 @@ export async function evaluateConditionsForScrape(
     }
   }
 
+  const dispatch = await dispatchAlerts(supabase, fired_ids);
+
   return {
     scrape_id,
     evaluated: conditions.length,
     fired: fired_ids.length,
     alert_ids: fired_ids,
     errors,
+    dispatch,
   };
 }

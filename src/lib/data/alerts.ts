@@ -2,6 +2,17 @@
 
 import { getServerSupabase } from "@/lib/supabase/server";
 
+export type AlertDelivery = {
+  channel_id: number;
+  channel_kind: "webhook" | "email" | "console";
+  channel_label: string | null;
+  channel_target: string;
+  ok: boolean;
+  status_code: number | null;
+  detail: string | null;
+  attempted_at: string;
+};
+
 export type AlertInboxRow = {
   id: number;
   fired_at: string;
@@ -15,6 +26,7 @@ export type AlertInboxRow = {
   product_name: string | null;
   brand: string | null;
   platform: string;
+  deliveries: AlertDelivery[];
   snapshot: {
     price?: number | null;
     currency?: string | null;
@@ -89,6 +101,44 @@ export async function getAlertsInbox(): Promise<AlertInboxRow[]> {
     byScrape.set(s.id as number, (s.payload ?? {}) as Record<string, unknown>);
   }
 
+  // batch-load deliveries for these alerts
+  const alertIds = rows.map((r) => r.id);
+  type DelRow = {
+    alert_id: number;
+    channel_id: number;
+    ok: boolean;
+    status_code: number | null;
+    detail: string | null;
+    attempted_at: string;
+    delivery_channels: {
+      kind: "webhook" | "email" | "console";
+      label: string | null;
+      target: string;
+    } | null;
+  };
+  const { data: delRows } = await supabase
+    .from("deliveries")
+    .select(
+      "alert_id, channel_id, ok, status_code, detail, attempted_at, delivery_channels(kind, label, target)",
+    )
+    .in("alert_id", alertIds)
+    .order("attempted_at", { ascending: false });
+  const deliveriesByAlert = new Map<number, AlertDelivery[]>();
+  for (const d of ((delRows ?? []) as unknown) as DelRow[]) {
+    const list = deliveriesByAlert.get(d.alert_id) ?? [];
+    list.push({
+      channel_id: d.channel_id,
+      channel_kind: d.delivery_channels?.kind ?? "webhook",
+      channel_label: d.delivery_channels?.label ?? null,
+      channel_target: d.delivery_channels?.target ?? "",
+      ok: d.ok,
+      status_code: d.status_code,
+      detail: d.detail,
+      attempted_at: d.attempted_at,
+    });
+    deliveriesByAlert.set(d.alert_id, list);
+  }
+
   return rows.map((r) => {
     const snap = (byScrape.get(r.scrape_id) ?? {}) as AlertInboxRow["snapshot"];
     return {
@@ -104,6 +154,7 @@ export async function getAlertsInbox(): Promise<AlertInboxRow[]> {
       product_name: snap.name ?? null,
       brand: snap.brand ?? null,
       platform: snap.platform_detected ?? hostOf(r.conditions.tracks.url),
+      deliveries: deliveriesByAlert.get(r.id) ?? [],
       snapshot: snap,
     };
   });

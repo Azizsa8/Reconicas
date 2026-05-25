@@ -12,12 +12,16 @@ import {
   ExternalLink,
   Inbox,
   Loader2,
+  Mail,
+  Terminal,
+  Webhook,
+  X as XIcon,
 } from "lucide-react";
 import { PlatformBadge } from "@/components/ui/PlatformBadge";
 import { cn } from "@/lib/cn";
 import { formatMoney, relativeTime } from "@/lib/format";
 import { setAlertAcknowledgedAction } from "./_actions";
-import type { AlertInboxRow } from "@/lib/data/alerts";
+import type { AlertDelivery, AlertInboxRow } from "@/lib/data/alerts";
 
 type Filter = "unread" | "all";
 type RangeKey = "24h" | "7d" | "30d" | "all";
@@ -218,8 +222,48 @@ function ListRow({
             <PlatformBadge platform={alert.platform} />
             <span className="truncate">{productLine}</span>
           </div>
+          {alert.deliveries.length > 0 && (
+            <div className="mt-1 text-[11px] text-[var(--fg-muted)] flex items-center gap-2">
+              <span className="tabular-nums">{alert.deliveries.length} {alert.deliveries.length === 1 ? "delivery" : "deliveries"}</span>
+              {alert.deliveries.some((d) => !d.ok) && (
+                <span className="inline-flex items-center gap-1 text-[var(--warning)] font-medium">
+                  <XIcon size={10} />
+                  partial
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
+    </li>
+  );
+}
+
+function DeliveryRow({ delivery: d }: { delivery: AlertDelivery }) {
+  const Icon = d.channel_kind === "email" ? Mail : d.channel_kind === "console" ? Terminal : Webhook;
+  return (
+    <li className="flex items-center gap-2 px-3 py-2 text-[12.5px]">
+      <Icon size={13} className="text-[var(--fg-muted)] flex-shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="font-medium truncate">
+          {d.channel_label || d.channel_kind}
+        </div>
+        <div className="font-mono text-[11px] text-[var(--fg-muted)] truncate" dir="ltr">
+          {d.detail || "—"}
+        </div>
+      </div>
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded border tabular-nums flex-shrink-0",
+          d.ok
+            ? "bg-[var(--success)]/10 text-[var(--success)] border-[var(--success)]/30"
+            : "bg-[var(--warning)]/10 text-[var(--warning)] border-[var(--warning)]/30",
+        )}
+        title={d.attempted_at}
+      >
+        {d.ok ? <Check size={10} /> : <XIcon size={10} />}
+        {d.status_code != null ? d.status_code : d.ok ? "ok" : "failed"}
+      </span>
     </li>
   );
 }
@@ -320,6 +364,20 @@ function AlertDetail({
           {alert.explanation || "(no explanation)"}
         </pre>
       </div>
+
+      {/* Channel deliveries */}
+      {alert.deliveries.length > 0 && (
+        <div className="mt-5">
+          <div className="text-[11px] uppercase tracking-wide text-[var(--fg-muted)] mb-1.5">
+            Channel deliveries
+          </div>
+          <ul className="border border-[var(--border)] rounded-lg divide-y divide-[var(--border)]">
+            {alert.deliveries.map((d, i) => (
+              <DeliveryRow key={`${d.channel_id}-${i}`} delivery={d} />
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Snapshot at fire time */}
       <div className="mt-5">
