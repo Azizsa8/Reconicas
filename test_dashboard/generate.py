@@ -481,7 +481,7 @@ def render() -> str:
           {summary.get('total', total_tests)} tests collected ·
           {summary.get('passed', total_pass)} passed / {summary.get('failed', total_fail)} failed</div>
       </div>
-      <div class="meta">Run on commit <span style="font-family:var(--mono)">{escape(os.popen('git rev-parse --short HEAD').read().strip()[:12] or 'n/a')}</span></div>
+      <div class="meta">Run on commit <span style="font-family:var(--mono)">{escape(os.popen('git rev-parse --short HEAD').read().strip()[:12] or 'n/a')}</span> · <a href="manual.html" style="color:var(--accent)">→ manual work queue</a></div>
     </header>
     """
 

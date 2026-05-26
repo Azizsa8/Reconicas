@@ -9,6 +9,14 @@ and what to do next.
   most recent pytest-json-report run.
 - `pytest_report.json` — last run produced by `pytest --json-report`.
 - `dashboard.html` — single-file dashboard (open in any browser).
+- `manual.py` / `manual.html` — interactive **manual work queue**:
+  every decision, scheduling slot, approval, ROADMAP discussion, and
+  external-setup step the dashboard surfaces. Pick the ones you want
+  to act on, choose between options inline, and the page assembles a
+  single Claude-ready prompt from your selection. Regenerate with
+  `python test_dashboard/manual.py`.
+- `UNTOUCHED.md` — Wave 3 inventory (untested source modules + plan).
+- `TEST_FIXES.md` — five-wave strategy doc.
 
 ## Regenerate
 

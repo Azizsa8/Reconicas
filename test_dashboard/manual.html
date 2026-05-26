@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Scrapling — Manual Work Queue</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0d1117;--panel:#151b23;--panel2:#1c232c;--text:#e6edf3;
+  --muted:#8b949e;--accent:#58a6ff;--ok:#3fb950;--fail:#f85149;--skip:#d29922;
+  --border:#30363d;--pill:#21262d;--mono:'JetBrains Mono','Fira Code',Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.5}
+a{color:var(--accent);text-decoration:none}
+header.top{padding:18px 28px;border-bottom:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;
+  position:sticky;top:0;background:var(--bg);z-index:10}
+header.top h1{margin:0;font-size:22px;font-weight:600}
+header.top .meta{color:var(--muted);font-size:12px}
+
+.toolbar{padding:14px 28px;border-bottom:1px solid var(--border);background:var(--panel);
+  display:flex;gap:10px;align-items:center;flex-wrap:wrap;position:sticky;top:62px;z-index:9}
+.toolbar input,.toolbar select{background:var(--panel2);border:1px solid var(--border);
+  color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px}
+.toolbar input{min-width:240px}
+.toolbar button{background:var(--accent);border:none;color:#0d1117;font-weight:600;
+  border-radius:6px;padding:7px 14px;cursor:pointer;font-size:13px}
+.toolbar button.secondary{background:var(--pill);color:var(--text);border:1px solid var(--border)}
+.toolbar button:hover{filter:brightness(1.1)}
+.toolbar .count{color:var(--muted);font-size:12px;font-family:var(--mono)}
+
+main{padding:18px 28px}
+.task{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+  padding:16px;margin-bottom:14px;transition:border-color .15s}
+.task:hover{border-color:#4a5568}
+.task.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.task h3{margin:0;font-size:15px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.task .title-row{display:flex;align-items:center;gap:10px;flex:1}
+.task input[type=checkbox]{width:18px;height:18px;cursor:pointer;accent-color:var(--accent)}
+.task .meta-row{margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;font-size:11.5px}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;background:var(--pill);
+  color:var(--muted);font-family:var(--mono);font-size:11px}
+.pill.priority{font-weight:600}
+.pill.category{font-weight:600}
+.task .context{color:var(--muted);font-size:13px;margin-top:10px;line-height:1.5}
+.task .options{margin-top:12px;display:grid;gap:8px}
+.task .opt{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;
+  background:var(--panel2);border:1px solid var(--border);border-radius:6px;cursor:pointer}
+.task .opt:hover{border-color:var(--accent)}
+.task .opt.chosen{border-color:var(--accent);background:rgba(88,166,255,.08)}
+.task .opt input[type=radio]{margin-top:3px;accent-color:var(--accent)}
+.task .opt-body{flex:1}
+.task .opt-label{font-weight:600;color:var(--text)}
+.task .opt-desc{color:var(--muted);font-size:12.5px;margin-top:2px}
+.task .deliverable{margin-top:10px;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.task .deliverable b{color:var(--text)}
+.task .actions{margin-top:10px;display:flex;gap:6px}
+.task .actions button{background:var(--pill);color:var(--text);border:1px solid var(--border);
+  border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11.5px;font-family:var(--mono)}
+.task .actions button:hover{border-color:var(--accent);color:var(--accent)}
+.task .actions button.copied{border-color:var(--ok);color:var(--ok)}
+
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;padding:14px 28px;
+  background:var(--panel2);border-bottom:1px solid var(--border)}
+.summary .box{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px}
+.summary .box .n{font-size:22px;font-weight:600}
+.summary .box .l{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.06em}
+
+.modal{display:none;position:fixed;inset:0;background:rgba(5,8,12,.78);backdrop-filter:blur(3px);z-index:100}
+.modal.open{display:flex;justify-content:center;align-items:flex-start;overflow:auto;padding:24px}
+.modal .sheet{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+  max-width:900px;width:100%;padding:24px;margin:auto}
+.modal h2{margin:0 0 14px;font-size:18px}
+.modal pre{background:#0a0d12;border:1px solid var(--border);border-radius:6px;
+  padding:14px;font-family:var(--mono);font-size:12px;color:#cdd9e5;
+  white-space:pre-wrap;max-height:60vh;overflow:auto}
+.modal .controls{display:flex;justify-content:space-between;gap:8px;margin-top:14px}
+.modal .controls button{background:var(--accent);color:#0d1117;border:none;
+  font-weight:600;border-radius:6px;padding:8px 16px;cursor:pointer}
+.modal .controls button.secondary{background:var(--pill);color:var(--text);border:1px solid var(--border)}
+
+footer{padding:14px 28px;color:var(--muted);font-size:12px;border-top:1px solid var(--border)}
+</style>
+</head><body>
+<header class="top">
+  <div>
+    <h1>Manual Work Queue</h1>
+    <div class="meta">14 tasks awaiting human judgement · refreshed 2026-05-26 19:51 UTC ·
+      <a href="dashboard.html">← back to test dashboard</a></div>
+  </div>
+  <div class="meta">Select tasks → click <b>Generate combined prompt</b> at top</div>
+</header>
+
+<div class="summary"><div class="box"><div class="n">14</div><div class="l">Manual tasks</div></div><div class="box"><div class="n" style="color:var(--fail)">3</div><div class="l">P0 items</div></div><div class="box"><div class="n" style="color:var(--skip)">5</div><div class="l">P1 items</div></div><div class="box"><div class="n" style="color:var(--muted)">6</div><div class="l">P2 items</div></div><div class="box"><div class="n" style="color:#a371f7">3</div><div class="l">Decision</div></div><div class="box"><div class="n" style="color:#58a6ff">2</div><div class="l">Scheduling</div></div><div class="box"><div class="n" style="color:#3fb950">2</div><div class="l">Approval</div></div><div class="box"><div class="n" style="color:#d29922">5</div><div class="l">ROADMAP</div></div><div class="box"><div class="n" style="color:#8b949e">2</div><div class="l">Setup</div></div></div>
+
+<div class="toolbar">
+  <input type="search" id="search" placeholder="filter by title, owner, id…" />
+  <select id="cat-filter"><option value="">all categories</option><option value="Decision">Decision</option><option value="Scheduling">Scheduling</option><option value="Approval">Approval</option><option value="ROADMAP">ROADMAP</option><option value="Setup">Setup</option></select>
+  <select id="pri-filter"><option value="">all priorities</option><option value="P0">P0</option><option value="P1">P1</option><option value="P2">P2</option></select>
+  <span class="count" id="count">14 shown · 0 selected</span>
+  <span style="flex:1"></span>
+  <button onclick="selectAllVisible()" class="secondary">select all visible</button>
+  <button onclick="clearSelection()" class="secondary">clear</button>
+  <button onclick="generatePrompt()">Generate combined prompt →</button>
+</div>
+
+<main id="tasks">
+    <article class="task" data-id="D1" data-category="Decision"
+      data-priority="P0">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Translator test strategy: strict pin vs. divergence-only</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--fail)">P0</span>
+            <span class="pill category" style="color:#a371f7">Decision</span>
+            <span class="pill">owner: Maintainer</span>
+            <span class="pill">10 min discussion</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">D1</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">scrapling/core/translator.py is an adapted fork of parsel&#x27;s CSS→XPath translator. Wave 3 includes a new tests/parser/test_translator.py — but its scope is your call.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-D1" value="Strict pin (recommended)" checked><div class="opt-body"><div class="opt-label">Strict pin (recommended)</div><div class="opt-desc">Tests assert exact XPath strings for the full surface. Catches every drift but you must update tests whenever you intentionally diverge.</div></div></label><label class="opt"><input type="radio" name="opt-D1" value="Divergence-only"><div class="opt-body"><div class="opt-label">Divergence-only</div><div class="opt-desc">Only assert behaviour that intentionally differs from parsel. Lower maintenance, but parsel-equivalent regressions slip through silently.</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> tests/parser/test_translator.py (~80 LOC) ·
+        <b>Blocks:</b> Wave 3 P0 — translator coverage</div>
+      <div class="actions">
+        <button onclick="copyOne('D1', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('D1')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Author tests/parser/test_translator.py for scrapling/core/translator.py. Strategy = {choice}. Cover HTMLTranslator.css_to_xpath, XPathExpr, and the public xpath_* helpers. Keep the file self-contained — no fixtures from elsewhere in tests/.</template>
+    </article>
+    
+
+    <article class="task" data-id="D2" data-category="Decision"
+      data-priority="P1">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>scrapling/engines/static.py — one PR or three?</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--skip)">P1</span>
+            <span class="pill category" style="color:#a371f7">Decision</span>
+            <span class="pill">owner: Maintainer</span>
+            <span class="pill">5 min decision</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">D2</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">783-LOC file. Wave 3 plans tests/fetchers/test_static_internals.py (~250 LOC, ~3 h). Two ways to split:</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-D2" value="Single PR (faster)" checked><div class="opt-body"><div class="opt-label">Single PR (faster)</div><div class="opt-desc">All sync + async + session internals tested in one file. Ships sooner; harder to review.</div></div></label><label class="opt"><input type="radio" name="opt-D2" value="Three PRs (recommended)"><div class="opt-body"><div class="opt-label">Three PRs (recommended)</div><div class="opt-desc">FetcherSession → FetcherClient → AsyncFetcherClient. Each PR is ~80 LOC. Easier to review and bisect failures.</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> tests/fetchers/test_static_internals*.py ·
+        <b>Blocks:</b> Wave 3 P1 — static.py coverage</div>
+      <div class="actions">
+        <button onclick="copyOne('D2', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('D2')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Implement Wave 3 static.py coverage using the {choice} strategy. Mock HTTPX / curl_cffi at the boundary so the tests don&#x27;t depend on a live server. Cover retries, redirects, header merging, proxy plumbing, and timeout handling.</template>
+    </article>
+    
+
+    <article class="task" data-id="D3" data-category="Decision"
+      data-priority="P2">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Fake fixtures vs. vendored playwright internals</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--muted)">P2</span>
+            <span class="pill category" style="color:#a371f7">Decision</span>
+            <span class="pill">owner: Maintainer</span>
+            <span class="pill">2 min decision</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">D3</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">tests/fetchers/test_response_factory.py needs a stand-in for playwright.Response so it can run without a real browser.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-D3" value="Minimal dataclasses (recommended)" checked><div class="opt-body"><div class="opt-label">Minimal dataclasses (recommended)</div><div class="opt-desc">Plain @dataclass with the attributes ResponseFactory reads. Independent of Playwright versions.</div></div></label><label class="opt"><input type="radio" name="opt-D3" value="Real playwright Response"><div class="opt-body"><div class="opt-label">Real playwright Response</div><div class="opt-desc">Requires a launched browser; ties the test to a binary.</div></div></label><label class="opt"><input type="radio" name="opt-D3" value="Mock with unittest.mock"><div class="opt-body"><div class="opt-label">Mock with unittest.mock</div><div class="opt-desc">Spec= the real class. Brittle against playwright upgrades.</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> tests/fetchers/test_response_factory.py ·
+        <b>Blocks:</b> Wave 3 P1 — convertor.py coverage</div>
+      <div class="actions">
+        <button onclick="copyOne('D3', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('D3')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Implement tests/fetchers/test_response_factory.py for scrapling/engines/toolbelt/convertor.py using {choice}. Verify status, headers, cookies, encoding, and follow() behaviour.</template>
+    </article>
+    
+
+    <article class="task" data-id="S1" data-category="Scheduling"
+      data-priority="P0">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Schedule Wave 3 authoring window (~9 h total)</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--fail)">P0</span>
+            <span class="pill category" style="color:#58a6ff">Scheduling</span>
+            <span class="pill">owner: You</span>
+            <span class="pill">9 h coding (can be split across days)</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">S1</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">7 new test files queued. Listed below with per-file estimates.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-S1" value="Single block (intensive day)" checked><div class="opt-body"><div class="opt-label">Single block (intensive day)</div><div class="opt-desc">All 7 files in one focused day. Faster cycle time; risk of fatigue.</div></div></label><label class="opt"><input type="radio" name="opt-S1" value="Spread across the week (recommended)"><div class="opt-body"><div class="opt-label">Spread across the week (recommended)</div><div class="opt-desc">1-2 files per day. Lower context-switching cost; reviewable PRs.</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> 7 PRs landed ·
+        <b>Blocks:</b> Wave 3 completion</div>
+      <div class="actions">
+        <button onclick="copyOne('S1', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('S1')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Open the test files in the order they appear in test_dashboard/UNTOUCHED.md and author them using the {choice} cadence. Stop after each file for a quick self-review before moving on.</template>
+    </article>
+    
+
+    <article class="task" data-id="S2" data-category="Scheduling"
+      data-priority="P1">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Stand up a Chromium-equipped CI sanity check</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--skip)">P1</span>
+            <span class="pill category" style="color:#58a6ff">Scheduling</span>
+            <span class="pill">owner: You</span>
+            <span class="pill">20 min</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">S2</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">All current passes were on a sandbox without chromium. CI runs on macOS-latest with chromium installed. Verify the suite stays green there before merging Wave 2.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-S2" value="Check PR #3 macOS CI status" checked><div class="opt-body"><div class="opt-label">Check PR #3 macOS CI status</div><div class="opt-desc">Wait for the existing workflow to complete; read the report.</div></div></label><label class="opt"><input type="radio" name="opt-S2" value="Run locally with chromium"><div class="opt-body"><div class="opt-label">Run locally with chromium</div><div class="opt-desc">playwright install chromium &amp;&amp; pytest tests/ — confirms 0 fail.</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> Green check on PR #3 ·
+        <b>Blocks:</b> Merging Wave 1 + 2</div>
+      <div class="actions">
+        <button onclick="copyOne('S2', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('S2')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Verify the Scrapling test suite is green on macOS CI with chromium installed. If the CI run failed, summarise the failures grouped by root cause and propose fixes.</template>
+    </article>
+    
+
+    <article class="task" data-id="A1" data-category="Approval"
+      data-priority="P0">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Review and approve PR #3 (Waves 1 + 2 + dashboard)</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--fail)">P0</span>
+            <span class="pill category" style="color:#3fb950">Approval</span>
+            <span class="pill">owner: Maintainer</span>
+            <span class="pill">15 min review</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">A1</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">PR #3 ships the dashboard + conftest.py browser-binary skips + tests/requirements.txt update. Net effect: 45 failures → 0; 55 informative skips on bare hosts.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-A1" value="Approve as-is" checked><div class="opt-body"><div class="opt-label">Approve as-is</div><div class="opt-desc">Ship Waves 1 + 2 and the dashboard.</div></div></label><label class="opt"><input type="radio" name="opt-A1" value="Approve with follow-up issues filed"><div class="opt-body"><div class="opt-label">Approve with follow-up issues filed</div><div class="opt-desc">Ship now; open issues for the Wave 3-5 work in the same review.</div></div></label><label class="opt"><input type="radio" name="opt-A1" value="Request changes"><div class="opt-body"><div class="opt-label">Request changes</div><div class="opt-desc">Add comments inline on what to tighten.</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> PR #3 status: merged or feedback delivered ·
+        <b>Blocks:</b> Everything downstream</div>
+      <div class="actions">
+        <button onclick="copyOne('A1', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('A1')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Review https://github.com/Azizsa8/Reconicas/pull/3. Outcome: {choice}. Walk through the dashboard, conftest changes, and the UNTOUCHED.md plan; flag anything that conflicts with project conventions in CONTRIBUTING.md.</template>
+    </article>
+    
+
+    <article class="task" data-id="A2" data-category="Approval"
+      data-priority="P1">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Approve the test-dashboard as a maintained artefact</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--skip)">P1</span>
+            <span class="pill category" style="color:#3fb950">Approval</span>
+            <span class="pill">owner: Maintainer</span>
+            <span class="pill">5 min decision</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">A2</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">The dashboard is checked in. Decide whether contributors regenerate it (Wave 5 pre-commit hook), CI regenerates it as a build artefact, or we drop the static file and rely on a generator-on-demand command.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-A2" value="Pre-commit hook (recommended)" checked><div class="opt-body"><div class="opt-label">Pre-commit hook (recommended)</div><div class="opt-desc">Hook fails if pytest_report.json is older than tests/. Keeps the file fresh; no CI artefact storage cost.</div></div></label><label class="opt"><input type="radio" name="opt-A2" value="CI artefact only"><div class="opt-body"><div class="opt-label">CI artefact only</div><div class="opt-desc">Drop the checked-in HTML; upload it from CI as a build artefact.</div></div></label><label class="opt"><input type="radio" name="opt-A2" value="Status quo"><div class="opt-body"><div class="opt-label">Status quo</div><div class="opt-desc">Manual `python test_dashboard/generate.py` after test runs.</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> .pre-commit-config.yaml or CI workflow change ·
+        <b>Blocks:</b> Wave 5 completion</div>
+      <div class="actions">
+        <button onclick="copyOne('A2', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('A2')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Implement the {choice} option for the test dashboard freshness guarantee. Update CONTRIBUTING.md with the new contributor instructions.</template>
+    </article>
+    
+
+    <article class="task" data-id="R1" data-category="ROADMAP"
+      data-priority="P2">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Wave 4.1 — Auto-detect pagination URLs</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--muted)">P2</span>
+            <span class="pill category" style="color:#d29922">ROADMAP</span>
+            <span class="pill">owner: Design + Maintainer</span>
+            <span class="pill">Design 1 h + impl 1-2 days</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">R1</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">ROADMAP item. Detect &#x27;next-page&#x27; style links on arbitrary HTML (rel=next, class hints, query-string patterns) and surface a Selector method.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-R1" value="Selector.paginate()" checked><div class="opt-body"><div class="opt-label">Selector.paginate()</div><div class="opt-desc">Method on Selector returning an iterator of candidate URLs.</div></div></label><label class="opt"><input type="radio" name="opt-R1" value="Standalone helper"><div class="opt-body"><div class="opt-label">Standalone helper</div><div class="opt-desc">scrapling.detect_pagination(html) -&gt; list[str].</div></div></label><label class="opt"><input type="radio" name="opt-R1" value="Defer"><div class="opt-body"><div class="opt-label">Defer</div><div class="opt-desc">File issue, no implementation this cycle.</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> Impl + tests/parser/test_pagination.py ·
+        <b>Blocks:</b> Wave 4 progress</div>
+      <div class="actions">
+        <button onclick="copyOne('R1', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('R1')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Design and implement pagination URL detection using the {choice} shape. Cover rel=next, class-based hints (next, more, page-next), and query-string ?page=N patterns.</template>
+    </article>
+    
+
+    <article class="task" data-id="R2" data-category="ROADMAP"
+      data-priority="P2">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Wave 4.2 — Auto-detect &amp; manipulate page schemas</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--muted)">P2</span>
+            <span class="pill category" style="color:#d29922">ROADMAP</span>
+            <span class="pill">owner: Design + Maintainer</span>
+            <span class="pill">Design 1 h + impl 2-3 days</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">R2</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">Detect JSON-LD / microdata / Open Graph blocks and expose them as queryable dicts on Selector.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-R2" value="Read-only API" checked><div class="opt-body"><div class="opt-label">Read-only API</div><div class="opt-desc">Selector.schema → dict of all detected schemas.</div></div></label><label class="opt"><input type="radio" name="opt-R2" value="Read+Patch API"><div class="opt-body"><div class="opt-label">Read+Patch API</div><div class="opt-desc">Allows modifying and re-emitting schemas (useful for AI agents).</div></div></label><label class="opt"><input type="radio" name="opt-R2" value="Defer"><div class="opt-body"><div class="opt-label">Defer</div><div class="opt-desc">Issue only, no code this cycle.</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> Impl + tests/parser/test_schemas.py ·
+        <b>Blocks:</b> Wave 4 progress</div>
+      <div class="actions">
+        <button onclick="copyOne('R2', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('R2')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Implement auto-detection of page schemas using the {choice} approach. Support JSON-LD, microdata, RDFa, and Open Graph.</template>
+    </article>
+    
+
+    <article class="task" data-id="R3" data-category="ROADMAP"
+      data-priority="P2">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Wave 4.3 — Page analyzer from meta-elements</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--muted)">P2</span>
+            <span class="pill category" style="color:#d29922">ROADMAP</span>
+            <span class="pill">owner: Design + Maintainer</span>
+            <span class="pill">Design 1 h + impl 1-2 days</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">R3</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">ROADMAP: &#x27;add analyzer ability that tries to learn about the page through meta-elements and return what it learned&#x27;.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-R3" value="Rule-based" checked><div class="opt-body"><div class="opt-label">Rule-based</div><div class="opt-desc">Walk well-known meta tags + heuristics. Deterministic, fast.</div></div></label><label class="opt"><input type="radio" name="opt-R3" value="LLM-assisted"><div class="opt-body"><div class="opt-label">LLM-assisted</div><div class="opt-desc">Optional LLM call for ambiguity. Slower, network-bound.</div></div></label><label class="opt"><input type="radio" name="opt-R3" value="Defer"><div class="opt-body"><div class="opt-label">Defer</div><div class="opt-desc">Issue only.</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> scrapling.analyze(html) + tests ·
+        <b>Blocks:</b> Wave 4 progress</div>
+      <div class="actions">
+        <button onclick="copyOne('R3', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('R3')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Build a page analyzer using a {choice} strategy. Return a structured report covering language, title, primary image, schema types, and detected content type.</template>
+    </article>
+    
+
+    <article class="task" data-id="R4" data-category="ROADMAP"
+      data-priority="P2">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Wave 4.4 — Generate regex from a group of elements</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--muted)">P2</span>
+            <span class="pill category" style="color:#d29922">ROADMAP</span>
+            <span class="pill">owner: Design + Maintainer</span>
+            <span class="pill">Design 1 h + impl 1 day</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">R4</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">Given several selected elements (e.g. all hrefs), produce a regex that matches the structural pattern they share.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-R4" value="Greedy LCS" checked><div class="opt-body"><div class="opt-label">Greedy LCS</div><div class="opt-desc">Longest-common-subsequence based — simple, works for URLs.</div></div></label><label class="opt"><input type="radio" name="opt-R4" value="Template-mining"><div class="opt-body"><div class="opt-label">Template-mining</div><div class="opt-desc">Replace varying segments with character classes; more general.</div></div></label><label class="opt"><input type="radio" name="opt-R4" value="Defer"><div class="opt-body"><div class="opt-label">Defer</div><div class="opt-desc">Issue only.</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> Selectors.regex_pattern() + tests ·
+        <b>Blocks:</b> Wave 4 progress</div>
+      <div class="actions">
+        <button onclick="copyOne('R4', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('R4')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Implement regex generation from a group of selected elements using the {choice} approach.</template>
+    </article>
+    
+
+    <article class="task" data-id="R5" data-category="ROADMAP"
+      data-priority="P2">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Wave 4.5 — Scrapy plugin replacing parsel</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--muted)">P2</span>
+            <span class="pill category" style="color:#d29922">ROADMAP</span>
+            <span class="pill">owner: Design + Maintainer</span>
+            <span class="pill">Design 2 h + impl 2-3 days</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">R5</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">ROADMAP: Scrapy plugin/decorator that swaps parsel for Scrapling on the response argument.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-R5" value="Middleware" checked><div class="opt-body"><div class="opt-label">Middleware</div><div class="opt-desc">Drop-in Scrapy DOWNLOADER_MIDDLEWARE. Cleanest UX.</div></div></label><label class="opt"><input type="radio" name="opt-R5" value="Decorator"><div class="opt-body"><div class="opt-label">Decorator</div><div class="opt-desc">@scrapling.use on the spider parse method. Minimal Scrapy coupling.</div></div></label><label class="opt"><input type="radio" name="opt-R5" value="Defer"><div class="opt-body"><div class="opt-label">Defer</div><div class="opt-desc">Issue only.</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> scrapling.scrapy module + tests ·
+        <b>Blocks:</b> Wave 4 progress</div>
+      <div class="actions">
+        <button onclick="copyOne('R5', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('R5')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Build the Scrapy integration using the {choice} pattern. Provide a working example spider and a smoke test.</template>
+    </article>
+    
+
+    <article class="task" data-id="E1" data-category="Setup"
+      data-priority="P1">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Install Chromium locally for full-fidelity dev runs</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--skip)">P1</span>
+            <span class="pill category" style="color:#8b949e">Setup</span>
+            <span class="pill">owner: You</span>
+            <span class="pill">5 min</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">E1</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">Without chromium, 49 tests skip locally (they pass on CI). Install once per dev machine.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-E1" value="Run command" checked><div class="opt-body"><div class="opt-label">Run command</div><div class="opt-desc">`python -m playwright install chromium`</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> Local: 49 fewer skips ·
+        <b>Blocks:</b> Local full-fidelity testing</div>
+      <div class="actions">
+        <button onclick="copyOne('E1', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('E1')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Run `python -m playwright install chromium` and re-run `python -m pytest tests/`. Report the new skip / fail / pass counts.</template>
+    </article>
+    
+
+    <article class="task" data-id="E2" data-category="Setup"
+      data-priority="P1">
+      <h3><div class="title-row">
+        <input type="checkbox" class="select" />
+        <div>
+          <div>Install Camoufox locally for stealth-tests</div>
+          <div class="meta-row">
+            <span class="pill priority" style="color:var(--skip)">P1</span>
+            <span class="pill category" style="color:#8b949e">Setup</span>
+            <span class="pill">owner: You</span>
+            <span class="pill">5 min</span>
+            <span class="pill" style="font-family:var(--mono);color:var(--muted)">E2</span>
+          </div>
+        </div></div>
+      </h3>
+      <div class="context">Without Camoufox, the 10 stealth-related tests skip. CI has it via the [fetchers] extras; local dev needs `camoufox fetch`.</div>
+      <div class="options"><label class="opt"><input type="radio" name="opt-E2" value="Run command" checked><div class="opt-body"><div class="opt-label">Run command</div><div class="opt-desc">`python -m camoufox fetch`</div></div></label></div>
+      <div class="deliverable"><b>Deliverable:</b> Local: 10 fewer skips ·
+        <b>Blocks:</b> Local stealth coverage</div>
+      <div class="actions">
+        <button onclick="copyOne('E2', this)">copy this prompt</button>
+        <button class="secondary" onclick="toggleOne('E2')">select / deselect</button>
+      </div>
+      <template class="prompt-template">Run `python -m camoufox fetch` and rerun the stealth tests in tests/fetchers/{sync,async}/test_stealth*.py. Summarise the result.</template>
+    </article>
+    </main>
+
+<footer>Edit <code>test_dashboard/manual.py</code> to add or change tasks · regenerate with
+<code>python test_dashboard/manual.py</code></footer>
+
+<div class="modal" id="prompt-modal">
+  <div class="sheet">
+    <h2>Combined prompt — paste into Claude / Claude Code</h2>
+    <pre id="prompt-text"></pre>
+    <div class="controls">
+      <button class="secondary" onclick="closeModal()">close</button>
+      <button onclick="copyPrompt()">copy to clipboard</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = sel => document.querySelector(sel);
+const $$ = sel => Array.from(document.querySelectorAll(sel));
+const taskEls = () => $$('.task');
+
+function updateCount(){
+  const visible = taskEls().filter(t => t.style.display !== 'none');
+  const sel = taskEls().filter(t => t.querySelector('.select').checked);
+  $('#count').textContent = `${visible.length} shown · ${sel.length} selected`;
+}
+
+function applyFilters(){
+  const q = $('#search').value.toLowerCase();
+  const cat = $('#cat-filter').value;
+  const pri = $('#pri-filter').value;
+  for(const t of taskEls()){
+    const text = t.textContent.toLowerCase();
+    const matchQ = !q || text.includes(q);
+    const matchC = !cat || t.dataset.category === cat;
+    const matchP = !pri || t.dataset.priority === pri;
+    t.style.display = (matchQ && matchC && matchP) ? '' : 'none';
+  }
+  updateCount();
+}
+
+$('#search').addEventListener('input', applyFilters);
+$('#cat-filter').addEventListener('change', applyFilters);
+$('#pri-filter').addEventListener('change', applyFilters);
+
+function toggleOne(id){
+  const t = document.querySelector(`.task[data-id="${id}"]`);
+  const cb = t.querySelector('.select');
+  cb.checked = !cb.checked;
+  t.classList.toggle('selected', cb.checked);
+  updateCount();
+}
+
+taskEls().forEach(t => {
+  t.querySelector('.select').addEventListener('change', e => {
+    t.classList.toggle('selected', e.target.checked);
+    updateCount();
+  });
+  // mark chosen radio
+  t.querySelectorAll('.opt input').forEach(r => {
+    r.addEventListener('change', () => {
+      t.querySelectorAll('.opt').forEach(o => o.classList.remove('chosen'));
+      r.closest('.opt').classList.add('chosen');
+    });
+  });
+  // initial chosen marker
+  const initial = t.querySelector('.opt input:checked');
+  if(initial) initial.closest('.opt').classList.add('chosen');
+});
+
+function selectAllVisible(){
+  for(const t of taskEls()){
+    if(t.style.display === 'none') continue;
+    const cb = t.querySelector('.select');
+    cb.checked = true;
+    t.classList.add('selected');
+  }
+  updateCount();
+}
+function clearSelection(){
+  taskEls().forEach(t => {
+    t.querySelector('.select').checked = false;
+    t.classList.remove('selected');
+  });
+  updateCount();
+}
+
+function promptForTask(t){
+  const template = t.querySelector('.prompt-template').innerHTML;
+  const opt = t.querySelector('.opt input:checked');
+  const choice = opt ? opt.value : '(unchosen)';
+  const title = t.querySelector('.title-row > div > div').textContent.trim();
+  const id = t.dataset.id;
+  const filled = template.replace(/{choice}/g, choice);
+  return `### [${id}] ${title}\n` +
+    `Chosen option: ${choice}\n\n${filled}`;
+}
+
+function copyOne(id, btn){
+  const t = document.querySelector(`.task[data-id="${id}"]`);
+  const text = promptForTask(t);
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'copied'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1200);
+  });
+}
+
+function generatePrompt(){
+  const selected = taskEls().filter(t => t.querySelector('.select').checked);
+  if(!selected.length){
+    alert('Select at least one task first.');
+    return;
+  }
+  const parts = selected.map(promptForTask);
+  const header = `You are helping me schedule and execute ${selected.length} manual ` +
+    `decision(s) on the Scrapling project. Work through each numbered section, ` +
+    `apply the chosen option, and report back per task with the outcome. ` +
+    `If any choice still says "(unchosen)", ask me before acting on it.\n\n`;
+  const body = header + parts.join('\n\n---\n\n');
+  $('#prompt-text').textContent = body;
+  $('#prompt-modal').classList.add('open');
+}
+
+function closeModal(){ $('#prompt-modal').classList.remove('open'); }
+function copyPrompt(){
+  navigator.clipboard.writeText($('#prompt-text').textContent);
+}
+document.addEventListener('keydown', e => { if(e.key === 'Escape') closeModal(); });
+$('#prompt-modal').addEventListener('click', e => { if(e.target.id === 'prompt-modal') closeModal(); });
+
+updateCount();
+</script>
+</body></html>
