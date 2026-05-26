@@ -508,6 +508,7 @@ def render() -> str:
     movements_html = "\n".join(mv_html)
 
     progress_html = render_progress(feature_stats, total_tests, total_pass, total_fail, total_skip)
+    untouched_html = render_untouched()
 
     # Gallery + modals
     gallery_cards = []
@@ -639,6 +640,7 @@ python test_dashboard/generate.py"""
     {head}
     {stats_html}
     {progress_html}
+    {untouched_html}
     {movements_html}
     {gallery_html}
     <section><h2>Prompt Library <small>copy → paste into Claude / Claude Code</small></h2>{prompt_lib}</section>
@@ -674,22 +676,26 @@ WAVES = [
     {
         "id": 2,
         "name": "Wave 2 — defensive skips for missing browser binaries",
-        "status": "todo",
+        "status": "done",
         "items": [
-            ("Add CHROMIUM_AVAILABLE probe to conftest.py", False),
-            ("Add CAMOUFOX_AVAILABLE probe to conftest.py", False),
-            ("Auto-skip 45 browser-dependent tests with a clear hint", False),
-            ("Document install commands in README test section", False),
+            ("Add CHROMIUM_AVAILABLE probe to conftest.py (via Playwright API)", True),
+            ("Add CAMOUFOX_AVAILABLE probe to conftest.py", True),
+            ("Auto-skip 45 browser-dependent tests with a clear hint", True),
+            ("Fine-grained skipping in test_ai_mcp.py (keeps unit tests alive)", True),
+            ("pytest_report_header surfaces detection state", True),
         ],
     },
     {
         "id": 3,
         "name": "Wave 3 — coverage gaps for untested source modules",
-        "status": "todo",
+        "status": "in_progress",
         "items": [
-            ("Allowlist trivial wrappers (__init__, _types, constants)", False),
-            ("Open tracking issue per real-logic module without a test", False),
-            ("Author skeleton test files for each, one PR per feature area", False),
+            ("Inventory untouched modules (test_dashboard/UNTOUCHED.md)", True),
+            ("Classify by priority (P0/P1/P2) and indirect coverage", True),
+            ("Estimate work per missing test file", True),
+            ("Author P0 tests — translator.py, mixins.py", False),
+            ("Author P1 tests — static.py, custom_types.py, convertor.py, custom.py, fingerprints.py", False),
+            ("Author P2 unit test for fetchers/chrome.py", False),
         ],
     },
     {
@@ -714,6 +720,74 @@ WAVES = [
         ],
     },
 ]
+
+
+UNTOUCHED_MODULES = [
+    {"path": "scrapling/core/translator.py", "loc": 134, "priority": "P0",
+     "indirect": 0, "proposal": "tests/parser/test_translator.py",
+     "est": "30 min", "rationale": "CSS-to-XPath translator — foundation under every CSS selector."},
+    {"path": "scrapling/core/mixins.py", "loc": 90, "priority": "P0",
+     "indirect": 0, "proposal": "tests/parser/test_selectors_generation.py",
+     "est": "45 min", "rationale": "SelectorsGeneration — powers AI / similarity workflows."},
+    {"path": "scrapling/engines/static.py", "loc": 783, "priority": "P1",
+     "indirect": 4, "proposal": "tests/fetchers/test_static_internals.py",
+     "est": "3 h", "rationale": "Largest file in the package; default user path. Internals untested."},
+    {"path": "scrapling/core/custom_types.py", "loc": 345, "priority": "P1",
+     "indirect": 1, "proposal": "tests/parser/test_text_handlers.py",
+     "est": "1 h", "rationale": "TextHandler / AttributesHandler shims used everywhere."},
+    {"path": "scrapling/engines/toolbelt/convertor.py", "loc": 323, "priority": "P1",
+     "indirect": 1, "proposal": "tests/fetchers/test_response_factory.py",
+     "est": "1.5 h", "rationale": "Playwright → Response conversion. Bugs surface as wrong status codes / cookies."},
+    {"path": "scrapling/engines/toolbelt/custom.py", "loc": 307, "priority": "P1",
+     "indirect": 1, "proposal": "tests/fetchers/test_response_model.py",
+     "est": "1 h", "rationale": "Response / BaseFetcher — attribute coercion, follow(), cookie handling."},
+    {"path": "scrapling/engines/toolbelt/fingerprints.py", "loc": 59, "priority": "P1",
+     "indirect": 1, "proposal": "tests/fetchers/test_fingerprints.py",
+     "est": "20 min", "rationale": "Header / UA generation; OS-detection branches untested."},
+    {"path": "scrapling/fetchers/chrome.py", "loc": 97, "priority": "P2",
+     "indirect": 4, "proposal": "tests/fetchers/test_dynamic_fetcher_unit.py",
+     "est": "30 min", "rationale": "Argument-validation branches reachable without launching a browser."},
+    {"path": "scrapling/spiders/templates/crawler.py", "loc": 72, "priority": "P2",
+     "indirect": 1, "proposal": "—", "est": "—",
+     "rationale": "Already exercised via test_templates.py — no new file needed."},
+]
+
+
+def render_untouched():
+    rows = []
+    for m in UNTOUCHED_MODULES:
+        prio_color = {"P0": "var(--fail)", "P1": "var(--skip)", "P2": "var(--muted)"}[m["priority"]]
+        rows.append(
+            f'<tr>'
+            f'<td><span class="mod-pill" style="background:rgba(248,81,73,.15);color:{prio_color}">{m["priority"]}</span> '
+            f'<span style="font-family:var(--mono);font-size:12px">{escape(m["path"])}</span></td>'
+            f'<td style="text-align:right;font-family:var(--mono);font-size:12px">{m["loc"]} loc</td>'
+            f'<td style="text-align:right;font-family:var(--mono);font-size:12px">{m["indirect"]} refs</td>'
+            f'<td style="font-family:var(--mono);font-size:12px;color:var(--accent)">{escape(m["proposal"])}</td>'
+            f'<td style="text-align:right;font-family:var(--mono);font-size:12px;color:var(--muted)">{escape(m["est"])}</td>'
+            f'<td style="color:var(--muted);font-size:12.5px">{escape(m["rationale"])}</td>'
+            f'</tr>'
+        )
+    total_loc = sum(m["loc"] for m in UNTOUCHED_MODULES)
+    n_p0 = sum(1 for m in UNTOUCHED_MODULES if m["priority"] == "P0")
+    n_p1 = sum(1 for m in UNTOUCHED_MODULES if m["priority"] == "P1")
+    n_p2 = sum(1 for m in UNTOUCHED_MODULES if m["priority"] == "P2")
+
+    return (
+        '<section><h2>Untouched modules report '
+        f'<small>{len(UNTOUCHED_MODULES)} modules · {total_loc} LOC · '
+        f'{n_p0} P0 + {n_p1} P1 + {n_p2} P2 · see test_dashboard/UNTOUCHED.md for the full plan</small></h2>'
+        '<table style="width:100%;border-collapse:collapse;font-size:13px">'
+        '<thead><tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--border)">'
+        '<th style="padding:6px 4px">Module</th>'
+        '<th style="text-align:right;padding:6px 4px">Size</th>'
+        '<th style="text-align:right;padding:6px 4px">Indirect</th>'
+        '<th style="padding:6px 4px">Proposed test file</th>'
+        '<th style="text-align:right;padding:6px 4px">Est.</th>'
+        '<th style="padding:6px 4px">Why</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table>'
+        '</section>'
+    )
 
 
 def render_progress(feature_stats, total_tests, total_pass, total_fail, total_skip):
