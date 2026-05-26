@@ -2,6 +2,7 @@ import pytest
 import pytest_httpbin
 
 from scrapling import DynamicFetcher
+from tests.conftest import SKIP_REAL_CHROME
 
 DynamicFetcher.adaptive = True
 
@@ -51,21 +52,27 @@ class TestDynamicFetcher:
     @pytest.mark.parametrize(
         "kwargs",
         [
-            {"disable_resources": True, "real_chrome": True},
+            pytest.param(
+                {"disable_resources": True, "real_chrome": True},
+                marks=SKIP_REAL_CHROME,
+            ),
             {"wait_selector": "h1", "wait_selector_state": "attached"},
             {"wait_selector": "h1", "wait_selector_state": "visible"},
-            {
-                "google_search": True,
-                "real_chrome": True,
-                "wait": 10,
-                "locale": "en-US",
-                "timezone_id": "America/New_York",
-                "extra_headers": {"ayo": ""},
-                "useragent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
-                "cookies": [{"name": "test", "value": "123", "domain": "example.com", "path": "/"}],
-                "network_idle": True,
-                "selector_config": {"keep_comments": False, "keep_cdata": False},
-            },
+            pytest.param(
+                {
+                    "google_search": True,
+                    "real_chrome": True,
+                    "wait": 10,
+                    "locale": "en-US",
+                    "timezone_id": "America/New_York",
+                    "extra_headers": {"ayo": ""},
+                    "useragent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
+                    "cookies": [{"name": "test", "value": "123", "domain": "example.com", "path": "/"}],
+                    "network_idle": True,
+                    "selector_config": {"keep_comments": False, "keep_cdata": False},
+                },
+                marks=SKIP_REAL_CHROME,
+            ),
         ],
     )
     def test_properties(self, fetcher, kwargs):

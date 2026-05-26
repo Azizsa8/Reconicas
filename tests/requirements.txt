@@ -6,3 +6,8 @@ pytest-httpbin==2.1.0
 pytest-asyncio
 httpbin~=0.10.0
 pytest-xdist
+# Runtime deps imported by code under test that aren't in [fetchers]. CI
+# installs them via `extras = ai,shell` in tox.ini; listing them here keeps
+# `pip install -r tests/requirements.txt` self-sufficient for local dev.
+markdownify>=1.2.0
+IPython>=8.37
