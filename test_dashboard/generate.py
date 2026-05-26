@@ -507,6 +507,8 @@ def render() -> str:
     mv_html.append("</div></section>")
     movements_html = "\n".join(mv_html)
 
+    progress_html = render_progress(feature_stats, total_tests, total_pass, total_fail, total_skip)
+
     # Gallery + modals
     gallery_cards = []
     modals = []
@@ -636,6 +638,7 @@ python test_dashboard/generate.py"""
     body = f"""
     {head}
     {stats_html}
+    {progress_html}
     {movements_html}
     {gallery_html}
     <section><h2>Prompt Library <small>copy → paste into Claude / Claude Code</small></h2>{prompt_lib}</section>
@@ -654,6 +657,159 @@ python test_dashboard/generate.py"""
 <style>{CSS}</style>
 </head><body>{body}<script>{JS}</script></body></html>
 """
+
+
+WAVES = [
+    {
+        "id": 1,
+        "name": "Wave 1 — graceful skips & test deps",
+        "status": "done",
+        "items": [
+            ("tests/conftest.py with SKIP_REAL_CHROME marker", True),
+            ("Wrap real_chrome=True params in sync & async dynamic tests", True),
+            ("Add markdownify + IPython to tests/requirements.txt", True),
+            ("Regenerate dashboard with current state", True),
+        ],
+    },
+    {
+        "id": 2,
+        "name": "Wave 2 — defensive skips for missing browser binaries",
+        "status": "todo",
+        "items": [
+            ("Add CHROMIUM_AVAILABLE probe to conftest.py", False),
+            ("Add CAMOUFOX_AVAILABLE probe to conftest.py", False),
+            ("Auto-skip 45 browser-dependent tests with a clear hint", False),
+            ("Document install commands in README test section", False),
+        ],
+    },
+    {
+        "id": 3,
+        "name": "Wave 3 — coverage gaps for untested source modules",
+        "status": "todo",
+        "items": [
+            ("Allowlist trivial wrappers (__init__, _types, constants)", False),
+            ("Open tracking issue per real-logic module without a test", False),
+            ("Author skeleton test files for each, one PR per feature area", False),
+        ],
+    },
+    {
+        "id": 4,
+        "name": "Wave 4 — ROADMAP follow-throughs",
+        "status": "todo",
+        "items": [
+            ("Auto-detect pagination URLs (impl + test)", False),
+            ("Auto-detect & manipulate page schemas (impl + test)", False),
+            ("Page analyzer from meta-elements (impl + test)", False),
+            ("Generate regex from a group of elements (impl + test)", False),
+            ("Scrapy plugin/decorator replacing parsel (impl + test)", False),
+        ],
+    },
+    {
+        "id": 5,
+        "name": "Wave 5 — keep the dashboard honest",
+        "status": "todo",
+        "items": [
+            ("Pre-commit hook: fail if pytest_report.json older than tests/", False),
+            ("CI step that uploads dashboard.html as artifact per run", False),
+        ],
+    },
+]
+
+
+def render_progress(feature_stats, total_tests, total_pass, total_fail, total_skip):
+    overall_pct = (total_pass / total_tests * 100) if total_tests else 0
+    active = total_tests - total_skip
+    healthy_pct = (total_pass / active * 100) if active else 0
+
+    # per-feature progress
+    feature_rows = []
+    for fname, s in feature_stats.items():
+        total = s["total"] or 1
+        pct = s["passed"] / total * 100
+        bar = (
+            f'<div class="bar" style="height:10px"><span class="ok" style="width:{pct:.1f}%"></span>'
+            f'<span class="fail" style="width:{(s["failed"]+s["error"])/total*100:.1f}%"></span>'
+            f'<span class="skip" style="width:{(s["skipped"]+s["unknown"])/total*100:.1f}%"></span></div>'
+        )
+        feature_rows.append(
+            f'<tr><td><b>{escape(fname)}</b></td>'
+            f'<td style="width:50%">{bar}</td>'
+            f'<td style="text-align:right;font-family:var(--mono)">{pct:.1f}%</td>'
+            f'<td style="text-align:right;color:var(--ok);font-family:var(--mono)">{s["passed"]}/{s["total"]}</td>'
+            f'<td style="text-align:right;color:var(--fail);font-family:var(--mono)">{s["failed"]+s["error"]}</td>'
+            f'<td style="text-align:right;color:var(--skip);font-family:var(--mono)">{s["skipped"]+s["unknown"]}</td></tr>'
+        )
+
+    # waves
+    total_steps = sum(len(w["items"]) for w in WAVES)
+    done_steps = sum(1 for w in WAVES for _, d in w["items"] if d)
+    plan_pct = done_steps / total_steps * 100 if total_steps else 0
+
+    wave_cards = []
+    for w in WAVES:
+        done = sum(1 for _, d in w["items"] if d)
+        total = len(w["items"])
+        pct = done / total * 100 if total else 0
+        badge = (
+            f'<span class="outcome passed">{done}/{total}</span>' if done == total
+            else f'<span class="outcome failed">{done}/{total}</span>' if done == 0
+            else f'<span class="outcome skipped">{done}/{total}</span>'
+        )
+        items_html = "".join(
+            f'<li style="list-style:none;padding:2px 0">'
+            f'<span style="font-family:var(--mono);color:{"var(--ok)" if d else "var(--muted)"}">'
+            f'{"✓" if d else "○"}</span> '
+            f'<span style="color:{"var(--text)" if d else "var(--muted)"};'
+            f'text-decoration:{"line-through" if d else "none"}">{escape(label)}</span></li>'
+            for label, d in w["items"]
+        )
+        wave_cards.append(
+            f'<div class="prompt-card">'
+            f'<h4>{escape(w["name"])} {badge}</h4>'
+            f'<div class="bar" style="height:6px;margin-bottom:8px">'
+            f'<span class="ok" style="width:{pct:.1f}%"></span></div>'
+            f'<ul style="padding:0;margin:0">{items_html}</ul></div>'
+        )
+
+    headline = f"""
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:18px">
+      <div class="stat ok"><div class="n">{overall_pct:.1f}%</div>
+        <div class="l">Passing of total (incl. skipped)</div></div>
+      <div class="stat ok"><div class="n">{healthy_pct:.1f}%</div>
+        <div class="l">Passing of runnable ({active} active)</div></div>
+      <div class="stat fail"><div class="n">{total_fail}</div>
+        <div class="l">Remaining failures</div></div>
+      <div class="stat"><div class="n">{plan_pct:.0f}%</div>
+        <div class="l">Fix plan complete ({done_steps}/{total_steps} steps)</div></div>
+    </div>
+    """
+
+    table = (
+        '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px">'
+        '<thead><tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--border)">'
+        '<th style="padding:6px 4px">Feature</th>'
+        '<th style="padding:6px 4px">Progress</th>'
+        '<th style="text-align:right;padding:6px 4px">%</th>'
+        '<th style="text-align:right;padding:6px 4px">passed</th>'
+        '<th style="text-align:right;padding:6px 4px">failed</th>'
+        '<th style="text-align:right;padding:6px 4px">skipped</th></tr></thead>'
+        f'<tbody>{"".join(feature_rows)}</tbody></table>'
+    )
+
+    waves_html = f'<div class="prompt-library">{"".join(wave_cards)}</div>'
+
+    return (
+        '<section><h2>Project Progress '
+        '<small>where we are, what\'s missing, what\'s left in %</small></h2>'
+        + headline
+        + '<h3 style="margin:18px 0 8px;font-size:14px;color:var(--muted);'
+        'text-transform:uppercase;letter-spacing:.06em">By feature</h3>'
+        + table
+        + '<h3 style="margin:18px 0 8px;font-size:14px;color:var(--muted);'
+        'text-transform:uppercase;letter-spacing:.06em">Fix plan — wave checklist</h3>'
+        + waves_html
+        + '</section>'
+    )
 
 
 def render_prompt_library() -> str:
