@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getServerSupabase } from "@/lib/supabase/server";
+import { generateSigningSecret, signRequest } from "@/lib/delivery/sign";
 
 async function authedSupabase() {
   const supabase = await getServerSupabase();
@@ -32,12 +33,17 @@ export async function addChannelAction(input: {
   const { data: tenant } = await supabase.from("tenants").select("id").limit(1).maybeSingle();
   if (!tenant) return { ok: false, error: "No workspace found." };
 
+  // Webhook channels get an HMAC signing secret at creation. Other kinds
+  // don't need one — they don't make outbound HTTP requests.
+  const config: Record<string, unknown> =
+    input.kind === "webhook" ? { signing_secret: generateSigningSecret() } : {};
+
   const { error } = await supabase.from("delivery_channels").insert({
     tenant_id: tenant.id,
     kind: input.kind,
     target,
     label: input.label?.trim() || null,
-    config: {},
+    config,
   });
   if (error) return { ok: false, error: error.message };
   revalidatePath("/app/channels");
@@ -71,7 +77,7 @@ export async function testChannelAction(channelId: number) {
 
   const { data: ch } = await supabase
     .from("delivery_channels")
-    .select("id, kind, target")
+    .select("id, kind, target, config")
     .eq("id", channelId)
     .maybeSingle();
   if (!ch) return { ok: false, error: "Channel not found." };
@@ -99,12 +105,28 @@ export async function testChannelAction(channelId: number) {
     },
   };
 
+  // Sign the test exactly like real dispatches so the receiver sees a
+  // production-shaped payload. Legacy channels without a secret get one
+  // lazily generated here (same as the dispatcher does on first send).
+  const config = (ch.config ?? {}) as { signing_secret?: string };
+  let secret = config.signing_secret;
+  if (!secret) {
+    secret = generateSigningSecret();
+    await supabase
+      .from("delivery_channels")
+      .update({ config: { ...config, signing_secret: secret } })
+      .eq("id", ch.id);
+  }
+  const body = JSON.stringify(payload);
+  const timestamp = Math.floor(Date.now() / 1000);
+  const signedHeaders = signRequest(secret, timestamp, body);
+
   const started = Date.now();
   try {
     const res = await fetch(ch.target, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      headers: { "Content-Type": "application/json", ...signedHeaders },
+      body,
       signal: AbortSignal.timeout(10_000),
     });
     const elapsed = Date.now() - started;

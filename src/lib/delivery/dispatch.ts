@@ -5,14 +5,34 @@
 // inserts a `deliveries` row recording ok / status_code / detail. Errors
 // never throw — we always record SOMETHING so the audit log is complete.
 //
+// Webhook hardening (see sibling modules):
+//   - sign.ts        : HMAC-SHA-256 signature headers (per-channel secret)
+//   - retry.ts       : in-band exponential retry policy for transient failures
+//   - rate-limit.ts  : per-channel sliding-window throttle
+//
 // Stable contract: webhooks receive `reconcart.alert/v1` payloads (same shape
 // the Add Channel modal preview shows). Email/console channels record a
 // receipt row but no SMTP/log integration is wired yet — they'll light up
 // when those backends ship.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  generateSigningSecret,
+  signRequest,
+} from "./sign";
+import { retryPolicy, sleep, type AttemptOutcome } from "./retry";
+import {
+  isRateLimited,
+  MAX_RATE_LIMIT_WINDOW_SECONDS,
+  type RateLimitConfig,
+} from "./rate-limit";
 
 type ChannelKind = "webhook" | "email" | "console";
+
+type ChannelConfig = {
+  signing_secret?: string;
+  rate_limit?: RateLimitConfig;
+};
 
 type ChannelRow = {
   id: number;
@@ -20,6 +40,7 @@ type ChannelRow = {
   kind: ChannelKind;
   target: string;
   enabled: boolean;
+  config: ChannelConfig | null;
 };
 
 type AlertJoin = {
@@ -47,7 +68,7 @@ export type DispatchResult = {
   failed: number;
 };
 
-const WEBHOOK_TIMEOUT_MS = 10_000;
+const WEBHOOK_TIMEOUT_MS = 5_000; // per-attempt; retries multiply this
 
 export async function dispatchAlerts(
   supabase: SupabaseClient,
@@ -69,15 +90,47 @@ export async function dispatchAlerts(
   const alerts = ((alertRows ?? []) as unknown) as AlertJoin[];
   if (alerts.length === 0) return { attempted: 0, delivered: 0, failed: 0 };
 
-  // Group alerts by tenant so we batch-fetch channels.
   const tenantIds = Array.from(new Set(alerts.map((a) => a.conditions.tracks.tenant_id)));
   const { data: channelRows } = await supabase
     .from("delivery_channels")
-    .select("id, tenant_id, kind, target, enabled")
+    .select("id, tenant_id, kind, target, enabled, config")
     .in("tenant_id", tenantIds)
     .eq("enabled", true);
   const channels = (channelRows ?? []) as ChannelRow[];
   if (channels.length === 0) return { attempted: 0, delivered: 0, failed: 0 };
+
+  // One batched fetch of recent deliveries for the rate-limit check.
+  // Queried over the max possible window so any per-channel config can be
+  // honored without further round-trips.
+  const since = new Date(Date.now() - MAX_RATE_LIMIT_WINDOW_SECONDS * 1000).toISOString();
+  const channelIds = channels.map((c) => c.id);
+  const { data: recentRows } = await supabase
+    .from("deliveries")
+    .select("channel_id, attempted_at, ok")
+    .in("channel_id", channelIds)
+    .gte("attempted_at", since);
+  const recentByChannel = new Map<number, { attempted_at: string; ok: boolean }[]>();
+  for (const r of recentRows ?? []) {
+    const list = recentByChannel.get(r.channel_id) ?? [];
+    list.push({ attempted_at: r.attempted_at, ok: r.ok });
+    recentByChannel.set(r.channel_id, list);
+  }
+
+  // Lazy-backfill signing_secrets for any webhook channel that lacks one.
+  // One UPDATE per legacy channel, only on first dispatch ever.
+  await Promise.all(
+    channels.map(async (c) => {
+      if (c.kind !== "webhook") return;
+      if (c.config?.signing_secret) return;
+      const secret = generateSigningSecret();
+      const nextConfig: ChannelConfig = { ...(c.config ?? {}), signing_secret: secret };
+      await supabase
+        .from("delivery_channels")
+        .update({ config: nextConfig })
+        .eq("id", c.id);
+      c.config = nextConfig;
+    }),
+  );
 
   const channelsByTenant = new Map<string, ChannelRow[]>();
   for (const c of channels) {
@@ -100,11 +153,20 @@ export async function dispatchAlerts(
     if (channelsForTenant.length === 0) continue;
     const payload = buildPayload(alert);
 
-    // Run a tenant's channels in parallel — they're independent network calls.
     const tenantAttempts = await Promise.all(
-      channelsForTenant.map(async (ch) => attemptOne(ch, alert.id, payload)),
+      channelsForTenant.map(async (ch) =>
+        attemptOne(ch, alert.id, payload, recentByChannel.get(ch.id) ?? []),
+      ),
     );
     attempts.push(...tenantAttempts);
+
+    // Record each just-completed attempt against the in-memory window so a
+    // burst of alerts in the same dispatch respects the rate limit too.
+    for (const a of tenantAttempts) {
+      const list = recentByChannel.get(a.channel_id) ?? [];
+      list.push({ attempted_at: new Date().toISOString(), ok: a.ok });
+      recentByChannel.set(a.channel_id, list);
+    }
   }
 
   if (attempts.length === 0) return { attempted: 0, delivered: 0, failed: 0 };
@@ -157,6 +219,7 @@ async function attemptOne(
   channel: ChannelRow,
   alert_id: number,
   payload: ReturnType<typeof buildPayload>,
+  recentForChannel: { attempted_at: string; ok: boolean }[],
 ): Promise<{
   alert_id: number;
   channel_id: number;
@@ -167,27 +230,43 @@ async function attemptOne(
   const base = { alert_id, channel_id: channel.id };
 
   if (channel.kind === "webhook") {
-    try {
-      const res = await fetch(channel.target, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
-      });
-      return {
-        ...base,
-        ok: res.ok,
-        status_code: res.status,
-        detail: `${res.status} ${res.statusText}`,
-      };
-    } catch (e) {
-      return {
-        ...base,
-        ok: false,
-        status_code: null,
-        detail: e instanceof Error ? e.message : "network error",
-      };
+    // Rate-limit check first. Filter to this channel's window before asking.
+    const limit = channel.config?.rate_limit;
+    if (limit) {
+      const windowStart = Date.now() - limit.window_seconds * 1000;
+      const inWindow = recentForChannel.filter(
+        (d) => Date.parse(d.attempted_at) >= windowStart,
+      );
+      if (isRateLimited(limit, inWindow, new Date())) {
+        return {
+          ...base,
+          ok: false,
+          status_code: null,
+          detail: `rate-limited: ${inWindow.length}/${limit.max} in last ${limit.window_seconds}s`,
+        };
+      }
     }
+
+    // Sign + send with retry loop.
+    const body = JSON.stringify(payload);
+    const secret = channel.config?.signing_secret ?? "";
+    let lastOutcome: AttemptOutcome = {
+      ok: false,
+      status_code: null,
+      detail: "no attempt made",
+    };
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const signedHeaders = secret ? signRequest(secret, timestamp, body) : {};
+      lastOutcome = await sendOnce(channel.target, body, signedHeaders);
+      if (lastOutcome.ok) {
+        return { ...base, ...lastOutcome };
+      }
+      const decision = retryPolicy(attempt, lastOutcome);
+      if (!decision.retry) break;
+      await sleep(decision.waitMs);
+    }
+    return { ...base, ...lastOutcome };
   }
 
   if (channel.kind === "console") {
@@ -198,12 +277,36 @@ async function attemptOne(
     return { ...base, ok: true, status_code: null, detail: "logged to server console" };
   }
 
-  // email — SMTP not wired yet. Record the attempt so the audit log is
-  // honest about what didn't ship.
   return {
     ...base,
     ok: false,
     status_code: null,
     detail: "email backend not configured — delivery skipped",
   };
+}
+
+async function sendOnce(
+  url: string,
+  body: string,
+  extraHeaders: Record<string, string>,
+): Promise<AttemptOutcome> {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...extraHeaders },
+      body,
+      signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+    });
+    return {
+      ok: res.ok,
+      status_code: res.status,
+      detail: `${res.status} ${res.statusText}`,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      status_code: null,
+      detail: e instanceof Error ? e.message : "network error",
+    };
+  }
 }
