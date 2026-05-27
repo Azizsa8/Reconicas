@@ -3,6 +3,10 @@
 import { useState, useTransition } from "react";
 import {
   Check,
+  Copy,
+  Eye,
+  EyeOff,
+  KeyRound,
   Loader2,
   Mail,
   Pause,
@@ -18,6 +22,7 @@ import { cn } from "@/lib/cn";
 import {
   addChannelAction,
   deleteChannelAction,
+  revealSigningSecretAction,
   setChannelEnabledAction,
   testChannelAction,
   type ChannelKind,
@@ -82,6 +87,9 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
   const [busy, startBusy] = useTransition();
   const [testResult, setTestResult] = useState<{ ok: boolean; detail?: string; error?: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [secretError, setSecretError] = useState<string | null>(null);
+  const [secretCopied, setSecretCopied] = useState(false);
 
   function onTest() {
     setTestResult(null);
@@ -89,6 +97,32 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
       const r = await testChannelAction(channel.id);
       setTestResult(r as { ok: boolean; detail?: string; error?: string });
     });
+  }
+
+  function onToggleSecret() {
+    if (secret) {
+      setSecret(null);
+      setSecretCopied(false);
+      return;
+    }
+    setSecretError(null);
+    startBusy(async () => {
+      const r = await revealSigningSecretAction(channel.id);
+      if (r.ok) setSecret(r.secret);
+      else setSecretError(r.error);
+    });
+  }
+
+  async function onCopySecret() {
+    if (!secret) return;
+    try {
+      await navigator.clipboard.writeText(secret);
+      setSecretCopied(true);
+      setTimeout(() => setSecretCopied(false), 2000);
+    } catch {
+      // Clipboard API can fail under permissions / insecure context.
+      // User can still select-and-copy the visible text manually.
+    }
   }
   function onTogglePause() {
     startBusy(async () => {
@@ -151,6 +185,45 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
                 : `Test failed: ${testResult.error || testResult.detail || "unknown error"}`}
             </div>
           )}
+
+          {secretError && (
+            <p className="mt-2 text-[12px] text-[var(--danger)]">{secretError}</p>
+          )}
+          {secret && (
+            <div className="mt-2 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)]/40 p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <KeyRound size={12} className="text-[var(--fg-muted)]" />
+                <span className="text-[11px] uppercase tracking-wide text-[var(--fg-muted)]">
+                  Signing secret
+                </span>
+                <button
+                  type="button"
+                  onClick={onCopySecret}
+                  className="ms-auto inline-flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] text-[var(--fg-muted)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-elevated)]"
+                  aria-label="Copy signing secret"
+                >
+                  {secretCopied ? <Check size={11} /> : <Copy size={11} />}
+                  {secretCopied ? "Copied" : "Copy"}
+                </button>
+              </div>
+              <code
+                dir="ltr"
+                className="block font-mono text-[11.5px] break-all select-all text-[var(--fg-primary)]"
+              >
+                {secret}
+              </code>
+              <p className="helper mt-2 text-[11.5px]">
+                Verify each request:{" "}
+                <span className="font-mono">
+                  HMAC-SHA256(secret, &quot;&lt;ts&gt;.&lt;rawBody&gt;&quot;)
+                </span>{" "}
+                must match the <span className="font-mono">v1=</span> value in{" "}
+                <span className="font-mono">X-ReconCart-Signature: t=&lt;ts&gt;,v1=&lt;hex&gt;</span>.
+                Reject if <span className="font-mono">|now − ts|</span> exceeds your replay
+                tolerance (300s is typical).
+              </p>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <button
@@ -162,6 +235,18 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
             {busy ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
             Test
           </button>
+          {channel.kind === "webhook" && (
+            <button
+              type="button"
+              onClick={onToggleSecret}
+              disabled={busy}
+              className="btn btn-secondary !py-1.5 !text-[12px]"
+              title={secret ? "Hide signing secret" : "Reveal signing secret"}
+            >
+              {secret ? <EyeOff size={12} /> : <Eye size={12} />}
+              Secret
+            </button>
+          )}
           <button
             type="button"
             onClick={onTogglePause}

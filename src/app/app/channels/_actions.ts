@@ -62,6 +62,35 @@ export async function setChannelEnabledAction(channelId: number, enabled: boolea
   return { ok: true };
 }
 
+export async function revealSigningSecretAction(channelId: number) {
+  const supabase = await authedSupabase();
+  if (!supabase) return { ok: false as const, error: "Sign in required." };
+
+  const { data: ch } = await supabase
+    .from("delivery_channels")
+    .select("id, kind, config")
+    .eq("id", channelId)
+    .maybeSingle();
+  if (!ch) return { ok: false as const, error: "Channel not found." };
+  if (ch.kind !== "webhook") {
+    return { ok: false as const, error: "Signing applies to webhook channels only." };
+  }
+
+  // Lazy backfill so legacy webhooks (created before signing shipped) get a
+  // secret on first reveal — same pattern as dispatch.ts and testChannelAction.
+  const config = (ch.config ?? {}) as { signing_secret?: string };
+  let secret = config.signing_secret;
+  if (!secret) {
+    secret = generateSigningSecret();
+    const { error } = await supabase
+      .from("delivery_channels")
+      .update({ config: { ...config, signing_secret: secret } })
+      .eq("id", ch.id);
+    if (error) return { ok: false as const, error: error.message };
+  }
+  return { ok: true as const, secret };
+}
+
 export async function deleteChannelAction(channelId: number) {
   const supabase = await authedSupabase();
   if (!supabase) return { ok: false, error: "Sign in required." };
