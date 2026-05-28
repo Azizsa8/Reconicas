@@ -91,6 +91,33 @@ export async function revealSigningSecretAction(channelId: number) {
   return { ok: true as const, secret };
 }
 
+export async function rotateSigningSecretAction(channelId: number) {
+  const supabase = await authedSupabase();
+  if (!supabase) return { ok: false as const, error: "Sign in required." };
+
+  const { data: ch } = await supabase
+    .from("delivery_channels")
+    .select("id, kind, config")
+    .eq("id", channelId)
+    .maybeSingle();
+  if (!ch) return { ok: false as const, error: "Channel not found." };
+  if (ch.kind !== "webhook") {
+    return { ok: false as const, error: "Signing applies to webhook channels only." };
+  }
+
+  // Replace unconditionally — that's the whole point of rotation. Any
+  // receiver still verifying with the previous secret will start failing
+  // until they update; that's the user's intent when they hit this button.
+  const config = (ch.config ?? {}) as Record<string, unknown>;
+  const next = generateSigningSecret();
+  const { error } = await supabase
+    .from("delivery_channels")
+    .update({ config: { ...config, signing_secret: next } })
+    .eq("id", ch.id);
+  if (error) return { ok: false as const, error: error.message };
+  return { ok: true as const, secret: next };
+}
+
 export async function deleteChannelAction(channelId: number) {
   const supabase = await authedSupabase();
   if (!supabase) return { ok: false, error: "Sign in required." };

@@ -12,6 +12,7 @@ import {
   Pause,
   Play,
   Plus,
+  RotateCw,
   Terminal,
   Trash2,
   Webhook,
@@ -23,6 +24,7 @@ import {
   addChannelAction,
   deleteChannelAction,
   revealSigningSecretAction,
+  rotateSigningSecretAction,
   setChannelEnabledAction,
   testChannelAction,
   type ChannelKind,
@@ -131,6 +133,8 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
   const [secret, setSecret] = useState<string | null>(null);
   const [secretError, setSecretError] = useState<string | null>(null);
   const [secretCopied, setSecretCopied] = useState(false);
+  const [rotateConfirm, setRotateConfirm] = useState(false);
+  const [rotateSuccess, setRotateSuccess] = useState(false);
 
   function onTest() {
     setTestResult(null);
@@ -164,6 +168,26 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
       // Clipboard API can fail under permissions / insecure context.
       // User can still select-and-copy the visible text manually.
     }
+  }
+  function onRotateSecret() {
+    if (!rotateConfirm) {
+      setRotateConfirm(true);
+      setTimeout(() => setRotateConfirm(false), 4000);
+      return;
+    }
+    setRotateConfirm(false);
+    setSecretError(null);
+    setSecretCopied(false);
+    startBusy(async () => {
+      const r = await rotateSigningSecretAction(channel.id);
+      if (r.ok) {
+        setSecret(r.secret);
+        setRotateSuccess(true);
+        setTimeout(() => setRotateSuccess(false), 4000);
+      } else {
+        setSecretError(r.error);
+      }
+    });
   }
   function onTogglePause() {
     startBusy(async () => {
@@ -237,16 +261,44 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
                 <span className="text-[11px] uppercase tracking-wide text-[var(--fg-muted)]">
                   Signing secret
                 </span>
-                <button
-                  type="button"
-                  onClick={onCopySecret}
-                  className="ms-auto inline-flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] text-[var(--fg-muted)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-elevated)]"
-                  aria-label="Copy signing secret"
-                >
-                  {secretCopied ? <Check size={11} /> : <Copy size={11} />}
-                  {secretCopied ? "Copied" : "Copy"}
-                </button>
+                <div className="ms-auto flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={onCopySecret}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] text-[var(--fg-muted)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-elevated)]"
+                    aria-label="Copy signing secret"
+                  >
+                    {secretCopied ? <Check size={11} /> : <Copy size={11} />}
+                    {secretCopied ? "Copied" : "Copy"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onRotateSecret}
+                    disabled={busy}
+                    className={cn(
+                      "inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px]",
+                      rotateConfirm
+                        ? "border-[var(--danger)]/40 bg-[var(--danger)]/8 text-[var(--danger)]"
+                        : "border-[var(--border)] text-[var(--fg-muted)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-elevated)]",
+                    )}
+                    aria-label="Rotate signing secret"
+                    title={
+                      rotateConfirm
+                        ? "Confirm — receivers using the old secret will start failing"
+                        : "Rotate signing secret (breaks any receiver still using the old one)"
+                    }
+                  >
+                    <RotateCw size={11} />
+                    {rotateConfirm ? "Confirm?" : "Rotate"}
+                  </button>
+                </div>
               </div>
+              {rotateSuccess && (
+                <div className="mb-2 text-[11px] text-[var(--success)] inline-flex items-center gap-1">
+                  <Check size={11} />
+                  New secret active. Update your receiver to verify with this value.
+                </div>
+              )}
               <code
                 dir="ltr"
                 className="block font-mono text-[11.5px] break-all select-all text-[var(--fg-primary)]"
