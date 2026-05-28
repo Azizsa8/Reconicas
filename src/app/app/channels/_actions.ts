@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getServerSupabase } from "@/lib/supabase/server";
 import { generateSigningSecret, signRequest } from "@/lib/delivery/sign";
+import { formatForSlack, isSlackUrl } from "@/lib/delivery/slack";
 
 async function authedSupabase() {
   const supabase = await getServerSupabase();
@@ -148,7 +149,9 @@ export async function testChannelAction(channelId: number) {
     };
   }
 
-  const payload = {
+  // Synthetic payload shaped like reconcart.alert/v1 so receivers see the same
+  // structure they'll get in production. Slack URLs get Block Kit formatting.
+  const reconcartPayload = {
     type: "reconcart.alert.test/v1",
     sent_at: new Date().toISOString(),
     channel_id: ch.id,
@@ -159,7 +162,17 @@ export async function testChannelAction(channelId: number) {
       fired_at: new Date().toISOString(),
       explanation: "This is a synthetic test delivery — no real alert fired.",
     },
+    track: {
+      url: "https://reconcart.vercel.app",
+      product_name: "Test product",
+      brand: null,
+      platform: null,
+    },
+    snapshot: { price: null, currency: null, availability: null },
   };
+  const payload = isSlackUrl(ch.target)
+    ? formatForSlack(reconcartPayload)
+    : reconcartPayload;
 
   // Sign the test exactly like real dispatches so the receiver sees a
   // production-shaped payload. Legacy channels without a secret get one

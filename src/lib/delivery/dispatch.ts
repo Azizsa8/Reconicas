@@ -26,6 +26,7 @@ import {
   MAX_RATE_LIMIT_WINDOW_SECONDS,
   type RateLimitConfig,
 } from "./rate-limit";
+import { formatForSlack, isSlackUrl } from "./slack";
 
 type ChannelKind = "webhook" | "email" | "console";
 
@@ -247,8 +248,12 @@ async function attemptOne(
       }
     }
 
-    // Sign + send with retry loop.
-    const body = JSON.stringify(payload);
+    // Sign + send with retry loop. Slack incoming-webhook URLs receive a
+    // Block-Kit-shaped message instead of the raw reconcart.alert/v1 payload
+    // so the alert actually renders in-channel. Signing still happens
+    // (Slack ignores the header); other webhook receivers keep the contract.
+    const bodyObject = isSlackUrl(channel.target) ? formatForSlack(payload) : payload;
+    const body = JSON.stringify(bodyObject);
     const secret = channel.config?.signing_secret ?? "";
     let lastOutcome: AttemptOutcome = {
       ok: false,
