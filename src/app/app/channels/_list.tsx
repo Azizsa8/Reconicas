@@ -37,6 +37,47 @@ export type ChannelRow = {
   created_at: string;
 };
 
+// Copy-pasteable verification recipes for integrators. Both use a
+// timing-safe comparison and a replay-tolerance check (300s ≈ Stripe's
+// default). The constants are file-scope so we don't re-allocate strings
+// on every ChannelCard render.
+const NODE_VERIFY_SNIPPET = `import { createHmac, timingSafeEqual } from "node:crypto";
+
+const SECRET = process.env.RECONCART_WEBHOOK_SECRET;
+const REPLAY_TOLERANCE_SECONDS = 300;
+
+export function verifyReconcartWebhook(rawBody, sigHeader) {
+  const m = /^t=(\\d+),v1=([0-9a-f]+)$/.exec(sigHeader ?? "");
+  if (!m) return false;
+  const [, t, v1] = m;
+  if (Math.abs(Date.now() / 1000 - Number(t)) > REPLAY_TOLERANCE_SECONDS) {
+    return false;
+  }
+  const expected = createHmac("sha256", SECRET).update(\`\${t}.\${rawBody}\`).digest();
+  const provided = Buffer.from(v1, "hex");
+  return expected.length === provided.length && timingSafeEqual(expected, provided);
+}`;
+
+const PYTHON_VERIFY_SNIPPET = `import hmac, hashlib, os, time
+
+SECRET = os.environ["RECONCART_WEBHOOK_SECRET"]
+REPLAY_TOLERANCE_SECONDS = 300
+
+def verify_reconcart_webhook(raw_body: bytes, sig_header: str) -> bool:
+    try:
+        parts = dict(p.split("=", 1) for p in sig_header.split(","))
+        ts = int(parts["t"])
+    except (ValueError, KeyError):
+        return False
+    if abs(time.time() - ts) > REPLAY_TOLERANCE_SECONDS:
+        return False
+    expected = hmac.new(
+        SECRET.encode(),
+        f"{ts}.".encode() + raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, parts["v1"])`;
+
 export function ChannelsList({ channels }: { channels: ChannelRow[] }) {
   const [adding, setAdding] = useState(false);
 
@@ -222,6 +263,16 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
                 Reject if <span className="font-mono">|now − ts|</span> exceeds your replay
                 tolerance (300s is typical).
               </p>
+              <details className="mt-3 group">
+                <summary className="cursor-pointer select-none text-[12px] text-[var(--fg-muted)] hover:text-[var(--fg-primary)] inline-flex items-center gap-1.5">
+                  <span className="font-medium">Show verification code</span>
+                  <span className="text-[10.5px] text-[var(--fg-muted)]">(Node.js, Python)</span>
+                </summary>
+                <div className="mt-3 space-y-3">
+                  <CodeBlock language="Node.js" code={NODE_VERIFY_SNIPPET} />
+                  <CodeBlock language="Python" code={PYTHON_VERIFY_SNIPPET} />
+                </div>
+              </details>
             </div>
           )}
         </div>
@@ -269,6 +320,43 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
         </div>
       </div>
     </li>
+  );
+}
+
+function CodeBlock({ language, code }: { language: string; code: string }) {
+  const [copied, setCopied] = useState(false);
+  async function onCopy() {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard API can fail under permissions / insecure context.
+    }
+  }
+  return (
+    <div className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--border)] bg-[var(--bg-elevated)]/40">
+        <span className="text-[11px] uppercase tracking-wide text-[var(--fg-muted)]">
+          {language}
+        </span>
+        <button
+          type="button"
+          onClick={onCopy}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] text-[var(--fg-muted)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-elevated)]"
+          aria-label={`Copy ${language} snippet`}
+        >
+          {copied ? <Check size={11} /> : <Copy size={11} />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre
+        dir="ltr"
+        className="m-0 p-3 text-[11.5px] font-mono whitespace-pre overflow-x-auto leading-relaxed"
+      >
+        {code}
+      </pre>
+    </div>
   );
 }
 
