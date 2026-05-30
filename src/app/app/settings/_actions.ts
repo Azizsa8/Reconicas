@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { getServerSupabase } from "@/lib/supabase/server";
 import { getAdminSupabase } from "@/lib/supabase/admin";
 import { ACTIVE_TENANT_COOKIE } from "@/lib/tenant";
+import { logAudit } from "@/lib/audit";
 
 export async function updateProfileAction(input: { display_name: string }) {
   const supabase = await getServerSupabase();
@@ -39,6 +40,13 @@ export async function updateWorkspaceAction(input: {
     .update({ display_name: name })
     .eq("id", input.tenant_id);
   if (error) return { ok: false, error: error.message };
+  await logAudit(supabase, {
+    action: "tenant.rename",
+    target_kind: "tenant",
+    target_id: input.tenant_id,
+    tenant_id: input.tenant_id,
+    metadata: { display_name: name },
+  });
   revalidatePath("/app/settings");
   revalidatePath("/app");
   return { ok: true };
@@ -60,6 +68,15 @@ export async function deleteAccountAction(input: { confirm: string }) {
   if (!admin) {
     return { ok: false, error: "Server is missing the service role key — contact support." };
   }
+
+  // Record BEFORE deleting — once the user is gone the audit insert can't
+  // succeed (actor_user_id FK + RLS both fail).
+  await logAudit(supabase, {
+    action: "account.delete",
+    target_kind: "user",
+    target_id: user.id,
+    metadata: { email: user.email },
+  });
 
   const { error: delErr } = await admin.auth.admin.deleteUser(user.id);
   if (delErr) return { ok: false, error: delErr.message };

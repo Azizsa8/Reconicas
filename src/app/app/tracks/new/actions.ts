@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { getServerSupabase } from "@/lib/supabase/server";
 import { getActiveTenant } from "@/lib/tenant";
 import { canonicalizeUrl } from "@/lib/url";
+import { logAudit } from "@/lib/audit";
 
 export type AddTrackResult =
   | { ok: true; track_id: number }
@@ -77,12 +78,33 @@ export async function addTrackAction(input: {
   }
 
   if (input.expression) {
-    await supabase.from("conditions").insert({
-      track_id: track.id,
-      expression: input.expression,
-      label: input.expression_label,
-    });
+    const { data: condition } = await supabase
+      .from("conditions")
+      .insert({
+        track_id: track.id,
+        expression: input.expression,
+        label: input.expression_label,
+      })
+      .select("id")
+      .single();
+    if (condition) {
+      await logAudit(supabase, {
+        action: "condition.create",
+        target_kind: "condition",
+        target_id: condition.id,
+        tenant_id: tenant.id,
+        metadata: { track_id: track.id, expression: input.expression, label: input.expression_label },
+      });
+    }
   }
+
+  await logAudit(supabase, {
+    action: "track.create",
+    target_kind: "track",
+    target_id: track.id,
+    tenant_id: tenant.id,
+    metadata: { url, cadence: input.cadence, intent: input.intent || null },
+  });
 
   redirect(`/app/tracks/${track.id}`);
 }
