@@ -37,6 +37,17 @@ type ChannelKind = "webhook" | "email" | "console";
 type ChannelConfig = {
   signing_secret?: string;
   rate_limit?: RateLimitConfig;
+  // Per-channel alert filter. When omitted, channel receives every alert
+  // for its tenant. See channelMatches() for the matching semantics.
+  alert_filter?: AlertFilter;
+};
+
+export type AlertFilter = {
+  // Only fire to this channel when the alert was raised by one of these
+  // condition IDs. Empty array OR undefined means "any condition".
+  condition_ids?: number[];
+  // Only fire when the snapshot availability matches. Default "any".
+  only_when?: "any" | "in_stock" | "out_of_stock";
 };
 
 type ChannelRow = {
@@ -158,8 +169,15 @@ export async function dispatchAlerts(
     if (channelsForTenant.length === 0) continue;
     const payload = buildPayload(alert);
 
+    // Per-channel alert filtering — silently skip channels whose filter
+    // doesn't match this alert. No deliveries row inserted: a filtered
+    // alert is "intentionally not delivered" and shouldn't pollute the
+    // delivery log with noise. UI surfaces filters elsewhere.
+    const matching = channelsForTenant.filter((ch) => channelMatches(ch, alert, payload));
+    if (matching.length === 0) continue;
+
     const tenantAttempts = await Promise.all(
-      channelsForTenant.map(async (ch) =>
+      matching.map(async (ch) =>
         attemptOne(ch, alert.id, payload, recentByChannel.get(ch.id) ?? []),
       ),
     );
@@ -184,6 +202,30 @@ export async function dispatchAlerts(
     delivered,
     failed: attempts.length - delivered,
   };
+}
+
+// Returns true iff the channel's alert_filter says this alert should be
+// delivered. Both halves of the filter are optional — missing means
+// "no constraint" (i.e. match).
+function channelMatches(
+  channel: ChannelRow,
+  alert: AlertJoin,
+  payload: ReturnType<typeof buildPayload>,
+): boolean {
+  const filter = channel.config?.alert_filter;
+  if (!filter) return true;
+
+  if (filter.condition_ids && filter.condition_ids.length > 0) {
+    if (!filter.condition_ids.includes(alert.condition_id)) return false;
+  }
+
+  if (filter.only_when && filter.only_when !== "any") {
+    const availability = payload.snapshot.availability;
+    if (filter.only_when === "in_stock" && availability !== "InStock") return false;
+    if (filter.only_when === "out_of_stock" && availability !== "OutOfStock") return false;
+  }
+
+  return true;
 }
 
 function buildPayload(alert: AlertJoin) {

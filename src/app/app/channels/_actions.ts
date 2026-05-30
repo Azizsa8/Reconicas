@@ -16,6 +16,60 @@ async function authedSupabase() {
 
 export type ChannelKind = "webhook" | "email" | "console";
 
+// Updates the alert_filter sub-config of a channel. Pass null to clear the
+// filter (channel receives every alert again). Returns the saved filter so
+// the UI can confirm.
+export async function updateChannelFilterAction(input: {
+  channel_id: number;
+  filter: { only_when?: "any" | "in_stock" | "out_of_stock"; condition_ids?: number[] } | null;
+}): Promise<{ ok: true; filter: typeof input.filter } | { ok: false; error: string }> {
+  const supabase = await authedSupabase();
+  if (!supabase) return { ok: false, error: "Sign in required." };
+
+  const { data: ch } = await supabase
+    .from("delivery_channels")
+    .select("id, config, tenant_id")
+    .eq("id", input.channel_id)
+    .maybeSingle();
+  if (!ch) return { ok: false, error: "Channel not found." };
+
+  const config = (ch.config ?? {}) as Record<string, unknown>;
+  if (input.filter === null) {
+    delete config.alert_filter;
+  } else {
+    // Normalize empty arrays away — they're equivalent to "no filter" on
+    // that dimension, and a smaller config is easier to read in DB rows.
+    const f: Record<string, unknown> = {};
+    if (input.filter.only_when && input.filter.only_when !== "any") {
+      f.only_when = input.filter.only_when;
+    }
+    if (input.filter.condition_ids && input.filter.condition_ids.length > 0) {
+      f.condition_ids = input.filter.condition_ids;
+    }
+    if (Object.keys(f).length === 0) {
+      delete config.alert_filter;
+    } else {
+      config.alert_filter = f;
+    }
+  }
+
+  const { error } = await supabase
+    .from("delivery_channels")
+    .update({ config })
+    .eq("id", input.channel_id);
+  if (error) return { ok: false, error: error.message };
+
+  await logAudit(supabase, {
+    action: "channel.toggle",
+    target_kind: "channel",
+    target_id: input.channel_id,
+    tenant_id: ch.tenant_id,
+    metadata: { event: "filter_update", filter: input.filter },
+  });
+  revalidatePath("/app/channels");
+  return { ok: true, filter: input.filter };
+}
+
 export async function addChannelAction(input: {
   kind: ChannelKind;
   target: string;
