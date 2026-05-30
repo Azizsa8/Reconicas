@@ -19,6 +19,12 @@ export async function updateProfileAction(input: { display_name: string }) {
     data: { display_name: name },
   });
   if (error) return { ok: false, error: error.message };
+  await logAudit(supabase, {
+    action: "profile.update",
+    target_kind: "user",
+    target_id: user.id,
+    metadata: { display_name: name },
+  });
   revalidatePath("/app/settings");
   revalidatePath("/app");
   return { ok: true };
@@ -94,6 +100,115 @@ export async function deleteAccountAction(input: { confirm: string }) {
   } catch {
     // ignore
   }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Two-factor authentication (TOTP)
+//
+// Supabase handles MFA out of the box. Our flow:
+//   1. enrollMfaAction — creates a new unverified TOTP factor + returns the
+//      QR-code SVG data URL the user scans into Google Authenticator / 1Password
+//      / Authy etc.
+//   2. verifyMfaEnrollAction — user enters the first 6-digit code from their
+//      app; if it matches the factor activates and the session is upgraded
+//      to AAL2.
+//   3. unenrollMfaAction — removes the factor entirely. Requires AAL2.
+//
+// listFactorsAction is used by the Security panel to render current state.
+// ---------------------------------------------------------------------------
+
+export async function listFactorsAction(): Promise<
+  | { ok: true; factors: Array<{ id: string; status: "verified" | "unverified"; created_at: string }> }
+  | { ok: false; error: string }
+> {
+  const supabase = await getServerSupabase();
+  const { data, error } = await supabase.auth.mfa.listFactors();
+  if (error) return { ok: false, error: error.message };
+  const totps = (data.all ?? []).filter((f) => f.factor_type === "totp");
+  return {
+    ok: true,
+    factors: totps.map((f) => ({
+      id: f.id,
+      status: f.status as "verified" | "unverified",
+      created_at: f.created_at,
+    })),
+  };
+}
+
+export async function enrollMfaAction(): Promise<
+  | { ok: true; factor_id: string; qr_code: string; secret: string }
+  | { ok: false; error: string }
+> {
+  const supabase = await getServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in required." };
+
+  // Clean up any prior unverified enrolls so we don't accumulate
+  // half-finished factors when the user retries.
+  const { data: existing } = await supabase.auth.mfa.listFactors();
+  for (const f of existing?.all ?? []) {
+    if (f.factor_type === "totp" && f.status === "unverified") {
+      await supabase.auth.mfa.unenroll({ factorId: f.id });
+    }
+  }
+
+  const { data, error } = await supabase.auth.mfa.enroll({
+    factorType: "totp",
+    friendlyName: `ReconCart ${new Date().toISOString().slice(0, 10)}`,
+  });
+  if (error || !data) return { ok: false, error: error?.message ?? "Could not start enrollment." };
+  return {
+    ok: true,
+    factor_id: data.id,
+    qr_code: data.totp.qr_code,
+    secret: data.totp.secret,
+  };
+}
+
+export async function verifyMfaEnrollAction(input: {
+  factor_id: string;
+  code: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await getServerSupabase();
+  const code = (input.code || "").replace(/\s/g, "");
+  if (!/^\d{6}$/.test(code)) return { ok: false, error: "Enter the 6-digit code." };
+
+  const { data: challenge, error: cErr } = await supabase.auth.mfa.challenge({
+    factorId: input.factor_id,
+  });
+  if (cErr || !challenge) return { ok: false, error: cErr?.message ?? "Could not start verification." };
+
+  const { error: vErr } = await supabase.auth.mfa.verify({
+    factorId: input.factor_id,
+    challengeId: challenge.id,
+    code,
+  });
+  if (vErr) return { ok: false, error: vErr.message };
+
+  await logAudit(supabase, {
+    action: "profile.update",
+    target_kind: "mfa",
+    metadata: { event: "enroll_verified", factor_id: input.factor_id },
+  });
+  revalidatePath("/app/settings");
+  revalidatePath("/app", "layout");
+  return { ok: true };
+}
+
+export async function unenrollMfaAction(input: {
+  factor_id: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await getServerSupabase();
+  const { error } = await supabase.auth.mfa.unenroll({ factorId: input.factor_id });
+  if (error) return { ok: false, error: error.message };
+  await logAudit(supabase, {
+    action: "profile.update",
+    target_kind: "mfa",
+    metadata: { event: "unenrolled", factor_id: input.factor_id },
+  });
+  revalidatePath("/app/settings");
+  revalidatePath("/app", "layout");
   return { ok: true };
 }
 

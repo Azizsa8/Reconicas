@@ -1,5 +1,8 @@
 // Alert delivery dispatch.
 //
+// See src/lib/log.ts for the structured logger used by the console-channel
+// path.
+//
 // Given a set of alert IDs that just fired, look up the tenant's enabled
 // channels and attempt one delivery per (alert, channel) pair. Each attempt
 // inserts a `deliveries` row recording ok / status_code / detail. Errors
@@ -27,6 +30,7 @@ import {
   type RateLimitConfig,
 } from "./rate-limit";
 import { formatForSlack, isSlackUrl } from "./slack";
+import { log } from "../log";
 
 type ChannelKind = "webhook" | "email" | "console";
 
@@ -275,10 +279,11 @@ async function attemptOne(
   }
 
   if (channel.kind === "console") {
-    console.log(
-      "[reconcart.alert]",
-      JSON.stringify({ channel: channel.id, alert: alert_id, payload }),
-    );
+    log.info("dispatch.console", {
+      channel_id: channel.id,
+      alert_id,
+      payload,
+    });
     return { ...base, ok: true, status_code: null, detail: "logged to server console" };
   }
 

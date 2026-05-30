@@ -14,6 +14,7 @@ export type EngineResult = {
   scrape_id: number;
   evaluated: number;
   fired: number;
+  suppressed: number;
   alert_ids: number[];
   errors: Array<{ condition_id: number; error: string }>;
   dispatch: DispatchResult;
@@ -31,10 +32,17 @@ export async function evaluateConditionsForScrape(
 
   const { data: conds } = await supabase
     .from("conditions")
-    .select("id, expression, label, enabled")
+    .select("id, expression, label, enabled, last_fired_at, suppress_seconds")
     .eq("track_id", track_id)
     .eq("enabled", true);
-  const conditions = conds ?? [];
+  const conditions = (conds ?? []) as Array<{
+    id: number;
+    expression: string;
+    label: string | null;
+    enabled: boolean;
+    last_fired_at: string | null;
+    suppress_seconds: number | null;
+  }>;
 
   // Previous scrape's payload (the one immediately before this one).
   let previousPayload: Record<string, unknown> | null = null;
@@ -60,21 +68,36 @@ export async function evaluateConditionsForScrape(
     explanation: string;
   }> = [];
 
+  // Suppression check uses wall-clock now() rather than scrape time to keep
+  // behavior intuitive — a manual run_now shouldn't bypass dedup just because
+  // it landed seconds after another scrape.
+  const now = Date.now();
+  const suppressed_ids: number[] = [];
+  const fired_condition_ids: number[] = [];
+
   for (const c of conditions) {
     const res = evaluate(c.expression, ctx);
     if (res.error) {
       errors.push({ condition_id: c.id, error: res.error });
       continue;
     }
-    if (res.fired) {
-      inserts.push({
-        condition_id: c.id,
-        scrape_id,
-        explanation: c.label
-          ? `${c.label}: ${res.explanation}`
-          : res.explanation,
-      });
+    if (!res.fired) continue;
+    const window_s = c.suppress_seconds ?? 86400;
+    if (c.last_fired_at && window_s > 0) {
+      const last = new Date(c.last_fired_at).getTime();
+      if (Number.isFinite(last) && now - last < window_s * 1000) {
+        suppressed_ids.push(c.id);
+        continue;
+      }
     }
+    fired_condition_ids.push(c.id);
+    inserts.push({
+      condition_id: c.id,
+      scrape_id,
+      explanation: c.label
+        ? `${c.label}: ${res.explanation}`
+        : res.explanation,
+    });
   }
 
   if (inserts.length > 0) {
@@ -85,6 +108,17 @@ export async function evaluateConditionsForScrape(
     if (!error && data) {
       for (const row of data) fired_ids.push(row.id as number);
     }
+    // Stamp last_fired_at so future scrapes within the suppression window
+    // don't refire. Best-effort — a failure here only widens dedup gaps,
+    // doesn't break the user-visible flow.
+    try {
+      await supabase
+        .from("conditions")
+        .update({ last_fired_at: new Date(now).toISOString() })
+        .in("id", fired_condition_ids);
+    } catch {
+      // ignore
+    }
   }
 
   const dispatch = await dispatchAlerts(supabase, fired_ids);
@@ -93,6 +127,7 @@ export async function evaluateConditionsForScrape(
     scrape_id,
     evaluated: conditions.length,
     fired: fired_ids.length,
+    suppressed: suppressed_ids.length,
     alert_ids: fired_ids,
     errors,
     dispatch,

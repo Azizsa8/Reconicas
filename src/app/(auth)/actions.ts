@@ -135,6 +135,35 @@ export async function loginAction(formData: FormData): Promise<AuthResult> {
   redirect("/app");
 }
 
+// MFA login challenge — used by /verify-mfa after a fresh sign-in when the
+// user has a verified TOTP factor. Upgrades the session from AAL1 to AAL2.
+export async function challengeMfaAction(input: {
+  factor_id: string;
+  code: string;
+}): Promise<AuthResult> {
+  const code = (input.code || "").replace(/\s/g, "");
+  if (!/^\d{6}$/.test(code)) return { ok: false, error: "Enter the 6-digit code." };
+  let supabase;
+  try {
+    supabase = await getServerSupabase();
+  } catch {
+    return { ok: false, error: "Auth backend not configured." };
+  }
+  const { data: challenge, error: cErr } = await supabase.auth.mfa.challenge({
+    factorId: input.factor_id,
+  });
+  if (cErr || !challenge) {
+    return { ok: false, error: cErr?.message ?? "Could not start verification." };
+  }
+  const { error: vErr } = await supabase.auth.mfa.verify({
+    factorId: input.factor_id,
+    challengeId: challenge.id,
+    code,
+  });
+  if (vErr) return { ok: false, error: "Code didn't match — try the latest one from your app." };
+  return { ok: true };
+}
+
 export async function logoutAction(): Promise<void> {
   try {
     const supabase = await getServerSupabase();

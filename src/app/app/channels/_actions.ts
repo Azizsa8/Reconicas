@@ -5,6 +5,7 @@ import { getServerSupabase } from "@/lib/supabase/server";
 import { getActiveTenant } from "@/lib/tenant";
 import { generateSigningSecret, signRequest } from "@/lib/delivery/sign";
 import { formatForSlack, isSlackUrl } from "@/lib/delivery/slack";
+import { logAudit } from "@/lib/audit";
 
 async function authedSupabase() {
   const supabase = await getServerSupabase();
@@ -40,14 +41,27 @@ export async function addChannelAction(input: {
   const config: Record<string, unknown> =
     input.kind === "webhook" ? { signing_secret: generateSigningSecret() } : {};
 
-  const { error } = await supabase.from("delivery_channels").insert({
-    tenant_id: tenant.id,
-    kind: input.kind,
-    target,
-    label: input.label?.trim() || null,
-    config,
-  });
+  const { data: channel, error } = await supabase
+    .from("delivery_channels")
+    .insert({
+      tenant_id: tenant.id,
+      kind: input.kind,
+      target,
+      label: input.label?.trim() || null,
+      config,
+    })
+    .select("id")
+    .single();
   if (error) return { ok: false, error: error.message };
+  if (channel) {
+    await logAudit(supabase, {
+      action: "channel.create",
+      target_kind: "channel",
+      target_id: channel.id,
+      tenant_id: tenant.id,
+      metadata: { kind: input.kind, label: input.label, target_redacted: target.slice(0, 30) + "…" },
+    });
+  }
   revalidatePath("/app/channels");
   return { ok: true };
 }
@@ -55,11 +69,23 @@ export async function addChannelAction(input: {
 export async function setChannelEnabledAction(channelId: number, enabled: boolean) {
   const supabase = await authedSupabase();
   if (!supabase) return { ok: false, error: "Sign in required." };
+  const { data: ch } = await supabase
+    .from("delivery_channels")
+    .select("tenant_id")
+    .eq("id", channelId)
+    .maybeSingle();
   const { error } = await supabase
     .from("delivery_channels")
     .update({ enabled })
     .eq("id", channelId);
   if (error) return { ok: false, error: error.message };
+  await logAudit(supabase, {
+    action: "channel.toggle",
+    target_kind: "channel",
+    target_id: channelId,
+    tenant_id: ch?.tenant_id ?? null,
+    metadata: { enabled },
+  });
   revalidatePath("/app/channels");
   return { ok: true };
 }
@@ -70,7 +96,7 @@ export async function revealSigningSecretAction(channelId: number) {
 
   const { data: ch } = await supabase
     .from("delivery_channels")
-    .select("id, kind, config")
+    .select("id, kind, config, tenant_id")
     .eq("id", channelId)
     .maybeSingle();
   if (!ch) return { ok: false as const, error: "Channel not found." };
@@ -90,6 +116,12 @@ export async function revealSigningSecretAction(channelId: number) {
       .eq("id", ch.id);
     if (error) return { ok: false as const, error: error.message };
   }
+  await logAudit(supabase, {
+    action: "channel.signing_secret_reveal",
+    target_kind: "channel",
+    target_id: ch.id,
+    tenant_id: ch.tenant_id,
+  });
   return { ok: true as const, secret };
 }
 
@@ -99,7 +131,7 @@ export async function rotateSigningSecretAction(channelId: number) {
 
   const { data: ch } = await supabase
     .from("delivery_channels")
-    .select("id, kind, config")
+    .select("id, kind, config, tenant_id")
     .eq("id", channelId)
     .maybeSingle();
   if (!ch) return { ok: false as const, error: "Channel not found." };
@@ -117,14 +149,32 @@ export async function rotateSigningSecretAction(channelId: number) {
     .update({ config: { ...config, signing_secret: next } })
     .eq("id", ch.id);
   if (error) return { ok: false as const, error: error.message };
+  await logAudit(supabase, {
+    action: "channel.signing_secret_rotate",
+    target_kind: "channel",
+    target_id: ch.id,
+    tenant_id: ch.tenant_id,
+  });
   return { ok: true as const, secret: next };
 }
 
 export async function deleteChannelAction(channelId: number) {
   const supabase = await authedSupabase();
   if (!supabase) return { ok: false, error: "Sign in required." };
+  const { data: ch } = await supabase
+    .from("delivery_channels")
+    .select("tenant_id, kind, label")
+    .eq("id", channelId)
+    .maybeSingle();
   const { error } = await supabase.from("delivery_channels").delete().eq("id", channelId);
   if (error) return { ok: false, error: error.message };
+  await logAudit(supabase, {
+    action: "channel.delete",
+    target_kind: "channel",
+    target_id: channelId,
+    tenant_id: ch?.tenant_id ?? null,
+    metadata: { kind: ch?.kind, label: ch?.label },
+  });
   revalidatePath("/app/channels");
   return { ok: true };
 }

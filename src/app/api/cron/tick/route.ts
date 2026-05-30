@@ -12,6 +12,7 @@ import { getAdminSupabase } from "@/lib/supabase/admin";
 import { scrapeUrl } from "@/lib/scrape";
 import { isDue, type Cadence } from "@/lib/conditions/cadence";
 import { evaluateConditionsForScrape } from "@/lib/conditions/engine";
+import { log } from "@/lib/log";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // longest Vercel allows on a serverless function
@@ -119,9 +120,21 @@ async function runTick(req: Request) {
     }
   }
 
+  const elapsed = Date.now() - started;
+  const failed = results.filter((r) => !r.scrape_ok).length;
+  const fired = results.reduce((a, r) => a + r.alerts_fired, 0);
+  log.info("cron.tick", {
+    elapsed_ms: elapsed,
+    candidates: tracks?.length ?? 0,
+    due: due.length,
+    succeeded: results.length - failed,
+    failed,
+    alerts_fired: fired,
+  });
+
   return NextResponse.json({
     ok: true,
-    elapsed_ms: Date.now() - started,
+    elapsed_ms: elapsed,
     candidates: tracks?.length ?? 0,
     due: due.length,
     results,

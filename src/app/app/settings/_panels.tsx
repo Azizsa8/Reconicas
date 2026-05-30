@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
@@ -19,9 +19,12 @@ import { cn } from "@/lib/cn";
 import { initials } from "@/lib/format";
 import {
   deleteAccountAction,
+  enrollMfaAction,
   sendPasswordResetAction,
+  unenrollMfaAction,
   updateProfileAction,
   updateWorkspaceAction,
+  verifyMfaEnrollAction,
 } from "./_actions";
 
 type Tab = "profile" | "workspace" | "data" | "api" | "notifications" | "security";
@@ -455,14 +458,185 @@ function SecurityPanel({ email }: { email: string }) {
         )}
       </div>
 
-      <div className="border border-[var(--border)] rounded-lg p-4 mt-3 opacity-60">
-        <div className="font-medium text-[14px]">Two-factor authentication</div>
-        <p className="text-[12px] text-[var(--fg-muted)] mt-0.5">
-          2FA setup is coming in a follow-up. For now your account is protected by
-          email + password and the Supabase session token rotation.
-        </p>
-      </div>
+      <MfaSection />
     </PanelCard>
+  );
+}
+
+function MfaSection() {
+  const [mode, setMode] = useState<"idle" | "enrolling" | "verified">("idle");
+  const [enrollment, setEnrollment] = useState<{
+    factor_id: string;
+    qr_code: string;
+    secret: string;
+  } | null>(null);
+  const [verifiedFactorId, setVerifiedFactorId] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, start] = useTransition();
+  const [loadingState, setLoadingState] = useState(true);
+
+  // On mount, ask the server whether the user already has a verified factor.
+  // Server action returns the list; we render accordingly. Done in useEffect
+  // via a transition so we don't block first paint.
+  useEffect(() => {
+    start(async () => {
+      const { listFactorsAction } = await import("./_actions");
+      const r = await listFactorsAction();
+      if (r.ok) {
+        const verified = r.factors.find((f) => f.status === "verified");
+        if (verified) {
+          setMode("verified");
+          setVerifiedFactorId(verified.id);
+        }
+      }
+      setLoadingState(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function onStartEnroll() {
+    setError(null);
+    start(async () => {
+      const r = await enrollMfaAction();
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setEnrollment({ factor_id: r.factor_id, qr_code: r.qr_code, secret: r.secret });
+      setMode("enrolling");
+    });
+  }
+
+  function onVerify() {
+    if (!enrollment) return;
+    setError(null);
+    start(async () => {
+      const r = await verifyMfaEnrollAction({
+        factor_id: enrollment.factor_id,
+        code,
+      });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setMode("verified");
+      setVerifiedFactorId(enrollment.factor_id);
+      setEnrollment(null);
+      setCode("");
+    });
+  }
+
+  function onDisable() {
+    if (!verifiedFactorId) return;
+    setError(null);
+    start(async () => {
+      const r = await unenrollMfaAction({ factor_id: verifiedFactorId });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setMode("idle");
+      setVerifiedFactorId(null);
+    });
+  }
+
+  return (
+    <div className="border border-[var(--border)] rounded-lg p-4 mt-3">
+      <div className="font-medium text-[14px]">Two-factor authentication</div>
+      <p className="text-[12px] text-[var(--fg-muted)] mt-0.5">
+        Add a one-time code requirement on top of your password. We support
+        any TOTP authenticator app (Google Authenticator, 1Password, Authy,
+        Microsoft Authenticator, Bitwarden).
+      </p>
+
+      {loadingState ? (
+        <p className="mt-3 text-[12px] text-[var(--fg-muted)]">Checking…</p>
+      ) : mode === "verified" ? (
+        <div className="mt-3">
+          <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-[var(--success)]/12 text-[var(--success)] border border-[var(--success)]/30">
+            <Check size={11} />
+            Enabled
+          </span>
+          <button
+            type="button"
+            onClick={onDisable}
+            disabled={busy}
+            className="btn btn-secondary ms-3"
+          >
+            Disable 2FA
+          </button>
+          <p className="mt-2 text-[11px] text-[var(--fg-muted)]">
+            You&apos;ll be prompted for a code from your authenticator on
+            future sign-ins. If you lose access to your device, contact
+            support to disable it.
+          </p>
+        </div>
+      ) : mode === "enrolling" && enrollment ? (
+        <div className="mt-3 space-y-3">
+          <ol className="text-[13px] text-[var(--fg-primary)] list-decimal ps-5 space-y-1.5">
+            <li>Open your authenticator app and scan this QR code.</li>
+            <li>Or paste this secret manually: <code className="font-mono text-[12px] bg-[var(--bg-elevated)] px-1.5 py-0.5 rounded">{enrollment.secret}</code></li>
+            <li>Enter the 6-digit code your app shows below.</li>
+          </ol>
+          <div
+            className="w-[200px] h-[200px] bg-white rounded-md p-2 border border-[var(--border)]"
+            dangerouslySetInnerHTML={{ __html: enrollment.qr_code }}
+            aria-label="2FA enrollment QR code"
+          />
+          <div className="flex gap-2 items-end">
+            <div>
+              <label htmlFor="mfa-code" className="label">Verification code</label>
+              <input
+                id="mfa-code"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={6}
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                className="input font-mono text-[16px] w-[140px] text-center tracking-[0.3em]"
+                placeholder="000000"
+                autoComplete="one-time-code"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={onVerify}
+              disabled={busy || code.length !== 6}
+              className="btn btn-primary"
+            >
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+              Verify and enable
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMode("idle");
+                setEnrollment(null);
+                setCode("");
+                setError(null);
+              }}
+              disabled={busy}
+              className="btn btn-secondary"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onStartEnroll}
+          disabled={busy}
+          className="btn btn-primary mt-3"
+        >
+          <Shield size={14} />
+          Set up 2FA
+        </button>
+      )}
+
+      {error && <div className="mt-2 helper-error">{error}</div>}
+    </div>
   );
 }
 

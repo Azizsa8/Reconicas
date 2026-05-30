@@ -20,6 +20,14 @@ export default async function AppLayout({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
+  // MFA enforcement: if the user has a verified TOTP factor but the current
+  // session is only AAL1 (just signed in with password, hasn't completed the
+  // second factor this session), push them to /verify-mfa first.
+  const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (aal && aal.currentLevel === "aal1" && aal.nextLevel === "aal2") {
+    redirect("/verify-mfa");
+  }
+
   const email = user.email || "";
   // First load after email confirmation: provisioning was deferred from
   // signup because there was no session yet. Provision the tenant now.
