@@ -30,6 +30,10 @@ export default function AuthLayout({
           Terms
         </Link>
         <span aria-hidden>·</span>
+        <Link href="/cookies" className="hover:text-[var(--fg-primary)]">
+          Cookies
+        </Link>
+        <span aria-hidden>·</span>
         <button
           className="hover:text-[var(--fg-primary)]"
           aria-label="Switch to Arabic"
