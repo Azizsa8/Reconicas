@@ -32,6 +32,9 @@ export default function HomePage() {
         <div className="max-w-2xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs text-[var(--fg-muted)]">
           <span>© {new Date().getFullYear()} ReconCart</span>
           <nav className="flex items-center gap-4">
+            <Link href="/docs" className="hover:text-[var(--fg-primary)]">
+              Docs
+            </Link>
             <Link href="/privacy" className="hover:text-[var(--fg-primary)]">
               Privacy
             </Link>

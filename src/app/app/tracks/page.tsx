@@ -29,15 +29,25 @@ export default async function TracksListPage() {
             </span>
           </div>
         </div>
-        <Link
-          href="/app/tracks/new"
-          aria-disabled={planLimitHit}
-          className={`btn btn-primary ${planLimitHit ? "opacity-50 pointer-events-none" : ""}`}
-          title={planLimitHit ? "Plan limit reached — upgrade to add more" : undefined}
-        >
-          <Plus size={14} />
-          Add track
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/app/tracks/import"
+            aria-disabled={planLimitHit}
+            className={`btn btn-secondary ${planLimitHit ? "opacity-50 pointer-events-none" : ""}`}
+            title={planLimitHit ? "Plan limit reached — upgrade to add more" : "Paste a CSV to add many at once"}
+          >
+            Bulk import
+          </Link>
+          <Link
+            href="/app/tracks/new"
+            aria-disabled={planLimitHit}
+            className={`btn btn-primary ${planLimitHit ? "opacity-50 pointer-events-none" : ""}`}
+            title={planLimitHit ? "Plan limit reached — upgrade to add more" : undefined}
+          >
+            <Plus size={14} />
+            Add track
+          </Link>
+        </div>
       </header>
 
       <TracksTable rows={data.rows} />
