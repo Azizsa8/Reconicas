@@ -7,13 +7,16 @@ import {
   Bell,
   Building,
   Check,
+  Copy,
   Download,
   Key,
   Loader2,
   Mail,
+  Plus,
   Shield,
   Trash2,
   User,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { initials } from "@/lib/format";
@@ -26,6 +29,12 @@ import {
   updateWorkspaceAction,
   verifyMfaEnrollAction,
 } from "./_actions";
+import {
+  createApiKeyAction,
+  listApiKeysAction,
+  revokeApiKeyAction,
+  type ApiKeyRow,
+} from "./_api_keys_actions";
 
 type Tab = "profile" | "workspace" | "data" | "api" | "notifications" | "security";
 
@@ -69,7 +78,7 @@ export function SettingsPanels({
         )}
         {tab === "workspace" && <WorkspacePanel tenant={initial.tenant} />}
         {tab === "data" && <DataPanel email={initial.email} />}
-        {tab === "api" && <ComingSoonPanel title="API keys" />}
+        {tab === "api" && <ApiKeysPanel />}
         {tab === "notifications" && <ComingSoonPanel title="Notifications" />}
         {tab === "security" && <SecurityPanel email={initial.email} />}
       </div>
@@ -636,6 +645,265 @@ function MfaSection() {
       )}
 
       {error && <div className="mt-2 helper-error">{error}</div>}
+    </div>
+  );
+}
+
+function ApiKeysPanel() {
+  const [loading, setLoading] = useState(true);
+  const [keys, setKeys] = useState<ApiKeyRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, start] = useTransition();
+  const [showCreate, setShowCreate] = useState(false);
+  const [label, setLabel] = useState("");
+  const [justCreated, setJustCreated] = useState<{ plaintext: string; label: string | null } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  function refresh() {
+    setError(null);
+    start(async () => {
+      const r = await listApiKeysAction();
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setKeys(r.keys);
+      setLoading(false);
+    });
+  }
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function onCreate() {
+    setError(null);
+    start(async () => {
+      const r = await createApiKeyAction({ label });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setJustCreated({ plaintext: r.plaintext, label: r.label });
+      setLabel("");
+      setShowCreate(false);
+      refresh();
+    });
+  }
+
+  function onRevoke(id: number) {
+    if (!confirm("Revoke this key? Any system currently using it will start receiving 401 errors.")) {
+      return;
+    }
+    setError(null);
+    start(async () => {
+      const r = await revokeApiKeyAction({ id });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      refresh();
+    });
+  }
+
+  async function onCopy(value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard blocked — user can copy manually
+    }
+  }
+
+  const activeKeys = keys.filter((k) => !k.revoked_at);
+  const revokedKeys = keys.filter((k) => k.revoked_at);
+
+  return (
+    <PanelCard
+      title="API keys"
+      desc="Programmatic access to your workspace. Use these in scripts, CI jobs, or your own dashboards. Bearer auth: pass the key in the Authorization header."
+    >
+      {justCreated && (
+        <div className="rounded-lg border border-[var(--success)]/30 bg-[var(--success)]/6 p-4 mb-4">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="font-medium text-[14px] text-[var(--success)]">
+                Key created
+                {justCreated.label && (
+                  <span className="ms-2 text-[var(--fg-muted)] font-normal text-[12px]">
+                    ({justCreated.label})
+                  </span>
+                )}
+              </div>
+              <p className="text-[12px] text-[var(--fg-muted)] mt-1">
+                Copy it now — we won&apos;t show it again. If you lose it,
+                revoke it and create a new one.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setJustCreated(null)}
+              className="text-[var(--fg-muted)] hover:text-[var(--fg-primary)]"
+              aria-label="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <div className="mt-3 flex gap-2 items-center">
+            <code className="flex-1 font-mono text-[12px] bg-[var(--bg-surface)] border border-[var(--border)] rounded px-2 py-2 break-all">
+              {justCreated.plaintext}
+            </code>
+            <button
+              type="button"
+              onClick={() => onCopy(justCreated.plaintext)}
+              className="btn btn-secondary flex-shrink-0"
+            >
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <details className="mt-3 text-[12px] text-[var(--fg-muted)]">
+            <summary className="cursor-pointer hover:text-[var(--fg-primary)]">
+              Quick usage example
+            </summary>
+            <pre className="mt-2 font-mono text-[11px] bg-[var(--bg-surface)] border border-[var(--border)] rounded p-2 overflow-x-auto leading-relaxed">
+{`curl -H "Authorization: Bearer ${justCreated.plaintext.slice(0, 16)}…" \\
+     https://reconcart.vercel.app/api/v1/tracks`}
+            </pre>
+          </details>
+        </div>
+      )}
+
+      {error && <div className="helper-error mb-3">{error}</div>}
+
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-[12px] text-[var(--fg-muted)]">
+          {loading
+            ? "Loading…"
+            : activeKeys.length === 0
+              ? "No keys yet."
+              : `${activeKeys.length} active key${activeKeys.length === 1 ? "" : "s"}`}
+        </span>
+        {!showCreate && (
+          <button
+            type="button"
+            onClick={() => setShowCreate(true)}
+            disabled={busy}
+            className="btn btn-primary"
+          >
+            <Plus size={14} />
+            New key
+          </button>
+        )}
+      </div>
+
+      {showCreate && (
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)]/40 p-3 mb-3">
+          <label htmlFor="key-label" className="label">
+            Label (optional)
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="key-label"
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="e.g. zapier-prod, internal-dashboard"
+              className="input text-[13px] flex-1"
+              maxLength={64}
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={onCreate}
+              disabled={busy}
+              className="btn btn-primary"
+            >
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+              Create
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowCreate(false);
+                setLabel("");
+              }}
+              disabled={busy}
+              className="btn btn-secondary"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-1.5">
+        {activeKeys.map((k) => (
+          <KeyRow key={k.id} k={k} onRevoke={onRevoke} />
+        ))}
+      </div>
+
+      {revokedKeys.length > 0 && (
+        <details className="mt-4">
+          <summary className="cursor-pointer text-[12px] text-[var(--fg-muted)] hover:text-[var(--fg-primary)]">
+            Revoked keys ({revokedKeys.length})
+          </summary>
+          <div className="mt-2 space-y-1.5 opacity-60">
+            {revokedKeys.map((k) => (
+              <KeyRow key={k.id} k={k} onRevoke={onRevoke} />
+            ))}
+          </div>
+        </details>
+      )}
+    </PanelCard>
+  );
+}
+
+function KeyRow({ k, onRevoke }: { k: ApiKeyRow; onRevoke: (id: number) => void }) {
+  const revoked = !!k.revoked_at;
+  return (
+    <div className="border border-[var(--border)] rounded-lg p-3 flex items-center gap-3 text-[13px]">
+      <Key
+        size={14}
+        className={revoked ? "text-[var(--fg-muted)]" : "text-[var(--accent)]"}
+        aria-hidden="true"
+      />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          {k.label && <span className="font-medium">{k.label}</span>}
+          <code className="font-mono text-[11px] bg-[var(--bg-elevated)] px-1.5 py-0.5 rounded">
+            {k.prefix}…
+          </code>
+          {revoked && (
+            <span className="text-[10px] uppercase tracking-wide text-[var(--danger)] font-medium px-1.5 py-0.5 rounded bg-[var(--danger)]/10">
+              Revoked
+            </span>
+          )}
+        </div>
+        <div className="text-[11px] text-[var(--fg-muted)] mt-0.5">
+          Created {new Date(k.created_at).toLocaleDateString()}
+          {k.last_used_at && (
+            <>
+              {" · "}Last used {new Date(k.last_used_at).toLocaleString()}
+            </>
+          )}
+          {!k.last_used_at && !revoked && <> · Never used</>}
+          {revoked && k.revoked_at && (
+            <> · Revoked {new Date(k.revoked_at).toLocaleString()}</>
+          )}
+        </div>
+      </div>
+      {!revoked && (
+        <button
+          type="button"
+          onClick={() => onRevoke(k.id)}
+          className="text-[12px] text-[var(--danger)] hover:underline"
+        >
+          Revoke
+        </button>
+      )}
     </div>
   );
 }

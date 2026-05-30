@@ -1,15 +1,21 @@
-// Test-scrape API. Auth-gated (must be a tenant member) — no persistence.
+// Test-scrape API. Accepts either a browser session or an API key
+// (Authorization: Bearer rc_live_…). No persistence — this is the
+// preview-style endpoint the Add Track form polls.
 import { NextResponse } from "next/server";
-import { getServerSupabase } from "@/lib/supabase/server";
+import { authenticate } from "@/lib/api/auth";
 import { scrapeUrl } from "@/lib/scrape";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
 export async function POST(req: Request) {
-  const supabase = await getServerSupabase();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ ok: false, error: "unauthenticated" }, { status: 401 });
+  const auth = await authenticate(req);
+  if (auth.kind === "unauthorized") {
+    return NextResponse.json(
+      { ok: false, error: `unauthenticated: ${auth.reason}` },
+      { status: 401 },
+    );
+  }
 
   let body: { url?: string } = {};
   try { body = await req.json(); } catch { /* noop */ }
