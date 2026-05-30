@@ -23,6 +23,12 @@ function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false; // explicit: refuse to run if no secret set
   const header = req.headers.get("authorization") || "";
+  // Two acceptable callers:
+  //   1. Vercel Cron (sets x-vercel-cron header + Authorization bearer).
+  //   2. Manual ops curl with the right bearer (no x-vercel-cron required).
+  // Either way the bearer must match. The x-vercel-cron header is purely
+  // a signal that this came from the scheduler and not a manual hit, useful
+  // for log filtering.
   return header === `Bearer ${secret}`;
 }
 
