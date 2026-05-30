@@ -1,15 +1,20 @@
 // Delivery channels — PRD-08.
 import { getServerSupabase } from "@/lib/supabase/server";
+import { getActiveTenant } from "@/lib/tenant";
 import { ChannelsList, type ChannelRow } from "./_list";
 
 export const dynamic = "force-dynamic";
 
 export default async function ChannelsPage() {
   const supabase = await getServerSupabase();
-  const { data } = await supabase
-    .from("delivery_channels")
-    .select("id, kind, target, label, enabled, created_at")
-    .order("created_at", { ascending: false });
+  const tenant = await getActiveTenant();
+  const { data } = tenant
+    ? await supabase
+        .from("delivery_channels")
+        .select("id, kind, target, label, enabled, created_at")
+        .eq("tenant_id", tenant.id)
+        .order("created_at", { ascending: false })
+    : { data: [] };
   const channels = (data ?? []) as ChannelRow[];
 
   return (

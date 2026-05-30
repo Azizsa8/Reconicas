@@ -56,10 +56,21 @@ export async function signupAction(formData: FormData): Promise<AuthResult> {
     return { ok: false, error: error.message };
   }
 
-  // Provision the initial tenant atomically via a SECURITY DEFINER RPC.
-  // (Direct INSERT into tenants/memberships hits the chicken-and-egg of
-  //  RLS requiring existing membership — the RPC bypasses RLS for this
-  //  one privileged provisioning step. See supabase/fix_signup_function.sql.)
+  // Branch on whether email confirmation was required. When the Supabase
+  // project has "Confirm email" ON, signUp returns a user but NO session —
+  // the user has to click the link in their inbox before they can sign in.
+  // In that mode we can't run the tenant-bootstrap RPC (no auth.uid()), so
+  // we defer it to the first dashboard load post-confirmation.
+  const needsEmailConfirmation = !!data.user && !data.session;
+  if (needsEmailConfirmation) {
+    // Stash the workspace name so the post-confirmation flow can finish
+    // provisioning. user_metadata.workspace_display_name was already set
+    // via the signUp options.data above.
+    const checkEmailPath = `/check-email?email=${encodeURIComponent(email)}`;
+    redirect(checkEmailPath);
+  }
+
+  // Confirmation OFF — session is live, provision tenant now.
   if (data.user) {
     const slug = randomTenantSlug();
     try {
@@ -73,6 +84,25 @@ export async function signupAction(formData: FormData): Promise<AuthResult> {
   }
 
   redirect("/app");
+}
+
+// Returns void rather than AuthResult so it can be wired directly into a
+// <form action={...}>. The success indication is evergreen UI ("if the
+// email exists, we sent a link") — we don't enumerate.
+export async function resendVerificationAction(formData: FormData): Promise<void> {
+  const email = String(formData.get("email") || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) return;
+  let supabase;
+  try {
+    supabase = await getServerSupabase();
+  } catch {
+    return;
+  }
+  try {
+    await supabase.auth.resend({ type: "signup", email });
+  } catch {
+    // Suppressed by design — don't enumerate.
+  }
 }
 
 export async function loginAction(formData: FormData): Promise<AuthResult> {

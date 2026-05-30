@@ -1,6 +1,7 @@
 // Data layer for the Alerts inbox (PRD-07).
 
 import { getServerSupabase } from "@/lib/supabase/server";
+import { getActiveTenant } from "@/lib/tenant";
 
 export type AlertDelivery = {
   channel_id: number;
@@ -51,13 +52,7 @@ function hostOf(url: string): string {
 export async function getAlertsInbox(): Promise<AlertInboxRow[]> {
   const supabase = await getServerSupabase();
 
-  let tenant: { id: string } | null = null;
-  try {
-    const r = await supabase.from("tenants").select("id").limit(1).maybeSingle();
-    tenant = r.data ?? null;
-  } catch {
-    return [];
-  }
+  const tenant = await getActiveTenant().catch(() => null);
   if (!tenant) return [];
 
   type Joined = {

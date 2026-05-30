@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getServerSupabase } from "@/lib/supabase/server";
+import { getActiveTenant } from "@/lib/tenant";
 import { generateSigningSecret, signRequest } from "@/lib/delivery/sign";
 import { formatForSlack, isSlackUrl } from "@/lib/delivery/slack";
 
@@ -31,7 +32,7 @@ export async function addChannelAction(input: {
     return { ok: false, error: "That doesn't look like a valid email address." };
   }
 
-  const { data: tenant } = await supabase.from("tenants").select("id").limit(1).maybeSingle();
+  const tenant = await getActiveTenant();
   if (!tenant) return { ok: false, error: "No workspace found." };
 
   // Webhook channels get an HMAC signing secret at creation. Other kinds

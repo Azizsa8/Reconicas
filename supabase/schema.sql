@@ -43,7 +43,7 @@ create table if not exists public.tracks (
   tenant_id     uuid not null references public.tenants(id) on delete cascade,
   url           text not null,
   intent        text,
-  cadence       public.track_cadence not null default 'daily',
+  cadence       public.track_cadence not null default 'hourly',
   enabled       boolean not null default true,
   created_at    timestamptz not null default now(),
   last_run_at   timestamptz

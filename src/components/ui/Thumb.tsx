@@ -4,6 +4,7 @@
 // loading=lazy keeps it simple.
 import { cn } from "@/lib/cn";
 import { initials } from "@/lib/format";
+import { ThumbImg } from "./ThumbImg";
 
 const PALETTE = [
   ["bg-amber-100 text-amber-700",   "bg-amber-900/30 text-amber-300"],
@@ -42,19 +43,7 @@ export function Thumb({
   if (src) {
     return (
       <span className={cls} style={{ width: size, height: size }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={src}
-          alt=""
-          loading="lazy"
-          width={size}
-          height={size}
-          className="w-full h-full object-cover"
-          onError={(e) => {
-            // Hide broken image — the letter fallback shows behind it.
-            (e.currentTarget as HTMLImageElement).style.display = "none";
-          }}
-        />
+        <ThumbImg src={src} size={size} />
       </span>
     );
   }

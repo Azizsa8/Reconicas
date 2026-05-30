@@ -1,5 +1,6 @@
 // Settings — PRD-09.
 import { getServerSupabase } from "@/lib/supabase/server";
+import { getActiveTenant } from "@/lib/tenant";
 import { SettingsPanels } from "./_panels";
 
 export const dynamic = "force-dynamic";
@@ -11,11 +12,15 @@ export default async function SettingsPage() {
   const meta = (user?.user_metadata ?? {}) as { display_name?: string };
   const display_name = (meta.display_name ?? "").trim() || email.split("@")[0] || "";
 
-  const { data: tenant } = await supabase
-    .from("tenants")
-    .select("id, slug, display_name, created_at")
-    .limit(1)
-    .maybeSingle();
+  const activeTenant = await getActiveTenant();
+  // Fetch full row (incl. created_at) for the active tenant if we have one.
+  const { data: tenant } = activeTenant
+    ? await supabase
+        .from("tenants")
+        .select("id, slug, display_name, created_at")
+        .eq("id", activeTenant.id)
+        .maybeSingle()
+    : { data: null };
 
   return (
     <div className="px-6 py-5 max-w-[1100px]">

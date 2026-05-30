@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { TenantSwitcher, type TenantOption } from "./TenantSwitcher";
 
 type Item = {
   href: string;
@@ -24,11 +25,13 @@ type Item = {
 };
 
 export function Sidebar({
-  tenantName,
+  tenants,
+  activeTenantId,
   counts,
   plan,
 }: {
-  tenantName: string | null;
+  tenants: TenantOption[];
+  activeTenantId: string | null;
   counts: { tracks: number; unread_alerts: number };
   plan: { name: string; max: number; used: number };
 }) {
@@ -92,11 +95,9 @@ export function Sidebar({
             </Link>
           </div>
         </div>
-        {tenantName && (
-          <div className="mt-2 text-[11px] text-[var(--fg-muted)] truncate" title={tenantName}>
-            {tenantName}
-          </div>
-        )}
+        <div className="mt-2">
+          <TenantSwitcher tenants={tenants} activeId={activeTenantId} />
+        </div>
       </div>
     </aside>
   );

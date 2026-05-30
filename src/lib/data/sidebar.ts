@@ -2,6 +2,7 @@
 // Returns ZEROS for the schema-not-yet-applied case so renders never break.
 
 import { getServerSupabase } from "@/lib/supabase/server";
+import { getActiveTenant } from "@/lib/tenant";
 
 export type SidebarCounts = {
   tracks: number;
@@ -24,13 +25,7 @@ export async function getSidebarCounts(): Promise<SidebarCounts> {
   };
 
   try {
-    // user's active tenant — first membership (MVP: single-tenant per user)
-    const { data: tenant } = await supabase
-      .from("tenants")
-      .select("id, display_name")
-      .limit(1)
-      .maybeSingle();
-
+    const tenant = await getActiveTenant();
     if (!tenant) return defaults;
 
     const [{ count: trackCount }, { count: alertCount }] = await Promise.all([

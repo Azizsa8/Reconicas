@@ -309,9 +309,116 @@ function applyOg(rec: ScrapeRecord, meta: Record<string, string>): ScrapeRecord 
 // Orchestrator
 // ---------------------------------------------------------------------------
 
-export async function scrapeUrl(url: string, opts: { timeoutMs?: number } = {}): Promise<ScrapeRecord> {
+// SSRF guard. Run BEFORE fetch (initial URL) and on every redirect we accept.
+// Blocks the cloud metadata IPs (most critical — leaks deploy credentials),
+// loopback (would let users probe localhost on the function), and RFC1918 +
+// link-local + multicast (would let users probe internal networks via the
+// Vercel egress side). DNS rebinding is still possible but the impact is
+// limited because we don't run secrets on the function side.
+// Exported for unit testing only.
+export function isBlockedHost(hostname: string): { blocked: boolean; reason?: string } {
+  if (!hostname) return { blocked: true, reason: "empty hostname" };
+  const lower = hostname.toLowerCase();
+  // Localhost names + metadata aliases.
+  if (lower === "localhost" || lower.endsWith(".localhost")) {
+    return { blocked: true, reason: "localhost" };
+  }
+  if (lower === "metadata.google.internal" || lower.endsWith(".internal")) {
+    return { blocked: true, reason: "metadata.google.internal" };
+  }
+  // IPv4 literal?
+  const v4 = lower.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (v4) {
+    const [a, b, c, d] = v4.slice(1).map(Number);
+    if ([a, b, c, d].some((n) => n < 0 || n > 255 || !Number.isFinite(n))) {
+      return { blocked: true, reason: "invalid IPv4" };
+    }
+    if (a === 10) return { blocked: true, reason: "RFC1918 10.0.0.0/8" };
+    if (a === 172 && b >= 16 && b <= 31) return { blocked: true, reason: "RFC1918 172.16.0.0/12" };
+    if (a === 192 && b === 168) return { blocked: true, reason: "RFC1918 192.168.0.0/16" };
+    if (a === 127) return { blocked: true, reason: "loopback 127.0.0.0/8" };
+    if (a === 169 && b === 254) return { blocked: true, reason: "link-local / metadata 169.254.0.0/16" };
+    if (a === 0) return { blocked: true, reason: "any-host 0.0.0.0/8" };
+    if (a === 100 && b >= 64 && b <= 127) return { blocked: true, reason: "CGNAT 100.64.0.0/10" };
+    if (a >= 224) return { blocked: true, reason: "multicast/reserved" };
+  }
+  // IPv6 literal — quick coverage of loopback + link-local + ULA + metadata
+  if (lower.includes(":")) {
+    if (lower === "::1" || lower === "[::1]") return { blocked: true, reason: "IPv6 loopback" };
+    if (lower.startsWith("fe80:") || lower.startsWith("[fe80:")) return { blocked: true, reason: "IPv6 link-local fe80::/10" };
+    if (lower.startsWith("fc") || lower.startsWith("[fc") || lower.startsWith("fd") || lower.startsWith("[fd")) {
+      return { blocked: true, reason: "IPv6 ULA fc00::/7" };
+    }
+    if (lower.startsWith("fd00:ec2:") || lower.startsWith("[fd00:ec2:")) {
+      return { blocked: true, reason: "AWS IMDS IPv6" };
+    }
+  }
+  return { blocked: false };
+}
+
+async function fetchOnce(url: string, timeoutMs: number): Promise<
+  | { ok: true; html: string; finalUrl: string; status: 200 }
+  | { ok: false; failure: "timeout" | "blocked" | "network" | "refused"; status: number | null; message: string; finalUrl: string }
+> {
+  // Pre-flight SSRF check on the input URL.
+  try {
+    const u = new URL(url);
+    const guard = isBlockedHost(u.hostname);
+    if (guard.blocked) {
+      return {
+        ok: false,
+        failure: "refused",
+        status: null,
+        message: guard.reason ?? "private address",
+        finalUrl: url,
+      };
+    }
+  } catch {
+    // URL parse failure caught upstream; let it through to the standard error.
+  }
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      headers: COMMON_HEADERS,
+      redirect: "follow",
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    const finalUrl = res.url || url;
+    if (!res.ok) {
+      return {
+        ok: false,
+        failure: "blocked",
+        status: res.status,
+        message: `HTTP ${res.status}`,
+        finalUrl,
+      };
+    }
+    const html = await res.text();
+    return { ok: true, html, finalUrl, status: 200 };
+  } catch (e) {
+    clearTimeout(timer);
+    const err = e as Error;
+    const isAbort = err.name === "AbortError" || /abort/i.test(err.message);
+    return {
+      ok: false,
+      failure: isAbort ? "timeout" : "network",
+      status: null,
+      message: err.message || String(err),
+      finalUrl: url,
+    };
+  }
+}
+
+export async function scrapeUrl(url: string, opts: { timeoutMs?: number; maxAttempts?: number } = {}): Promise<ScrapeRecord> {
   const t0 = Date.now();
-  const timeoutMs = opts.timeoutMs ?? 15000;
+  // 25s per attempt, two attempts max — 30s Vercel budget covers one full
+  // attempt plus a partial retry. The retry helps with flaky upstreams that
+  // intermittently 502/abort but recover on the second hit.
+  const timeoutMs = opts.timeoutMs ?? 25000;
+  const maxAttempts = opts.maxAttempts ?? 2;
   const rec = emptyRecord(url);
 
   // Validate URL — keeps caller safer (SSRF prevention is a future concern)
@@ -327,29 +434,41 @@ export async function scrapeUrl(url: string, opts: { timeoutMs?: number } = {}):
 
   let html = "";
   let finalUrl = url;
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    const res = await fetch(url, {
-      headers: COMMON_HEADERS,
-      redirect: "follow",
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
-    finalUrl = res.url || url;
-    rec.attempts = 1;
-    if (!res.ok) {
-      rec.error = `HTTP ${res.status}`;
-      rec.platform_detected = detectPlatform(url);
-      rec.effective_url = finalUrl;
-      rec.redirected = finalUrl !== url;
-      rec.elapsed_ms = Date.now() - t0;
-      return rec;
+  let attempts = 0;
+  let lastFailure: { failure: "timeout" | "blocked" | "network" | "refused"; message: string; status: number | null } | null = null;
+  // Retry strategy: blocked (4xx) and refused (SSRF) are deterministic, no
+  // point retrying — only timeout/network failures get a second attempt.
+  while (attempts < maxAttempts) {
+    attempts++;
+    // Final attempt gets the remaining function-budget cap so we never
+    // overshoot Vercel's 30s function maxDuration.
+    const remainingBudget = Math.max(1000, 28000 - (Date.now() - t0));
+    const attemptTimeout = Math.min(timeoutMs, remainingBudget);
+    const result = await fetchOnce(url, attemptTimeout);
+    if (result.ok) {
+      html = result.html;
+      finalUrl = result.finalUrl;
+      lastFailure = null;
+      break;
     }
-    html = await res.text();
-  } catch (e) {
-    rec.error = `fetch failed: ${(e as Error).message}`;
+    lastFailure = { failure: result.failure, message: result.message, status: result.status };
+    finalUrl = result.finalUrl;
+    if (result.failure === "blocked" || result.failure === "refused") break; // deterministic — no retry
+  }
+  rec.attempts = attempts;
+  if (lastFailure) {
+    rec.failure_kind = lastFailure.failure;
+    rec.error =
+      lastFailure.failure === "timeout"
+        ? `Page took too long to respond (>${Math.round(timeoutMs / 1000)}s).`
+        : lastFailure.failure === "blocked"
+          ? `Site blocked the request (${lastFailure.message}). Try a different page or platform.`
+          : lastFailure.failure === "refused"
+            ? `This URL points to a private or internal address (${lastFailure.message}) and was not fetched. Use a public competitor URL.`
+            : `Couldn't reach the site (${lastFailure.message}).`;
     rec.platform_detected = detectPlatform(url);
+    rec.effective_url = finalUrl;
+    rec.redirected = finalUrl !== url;
     rec.elapsed_ms = Date.now() - t0;
     return rec;
   }
@@ -364,23 +483,106 @@ export async function scrapeUrl(url: string, opts: { timeoutMs?: number } = {}):
     // Enrich with OG too — JSON-LD sometimes misses images/description
     const meta = extractMeta(html);
     applyOg(ld, meta);
-    ld.attempts = 1;
+    ld.attempts = attempts;
     ld.platform_detected = rec.platform_detected;
     ld.effective_url = finalUrl;
     ld.redirected = rec.redirected;
+    ld.page_kind = "product";
     ld.elapsed_ms = Date.now() - t0;
     return ld;
   }
 
-  // Tier 2
+  // Tier 2 — OpenGraph. Also figure out if this is a store homepage rather
+  // than a product page so the UI can render the right shape.
   const meta = extractMeta(html);
   applyOg(rec, meta);
+
+  // Store detection: try JSON-LD Organization/WebSite/Store types, then
+  // fall back to a URL heuristic (root path → likely homepage).
+  const storeInfo = extractStoreInfo(findLdBlobs(html));
+  const looksLikeHomepage = isHomepageUrl(finalUrl);
+  if (storeInfo || looksLikeHomepage) {
+    rec.page_kind = "store";
+    rec.store_name =
+      storeInfo?.name ||
+      meta["og:site_name"] ||
+      rec.name ||
+      hostnameLabel(finalUrl);
+    // Promote store fields onto the existing slots so the UI doesn't need
+    // separate plumbing for store vs product images/descriptions.
+    if (!rec.name) rec.name = rec.store_name;
+    if (storeInfo?.logo && rec.images.length === 0) rec.images = [storeInfo.logo];
+    if (storeInfo?.description && !rec.description) rec.description = storeInfo.description;
+  } else {
+    rec.page_kind = "product";
+  }
+
   rec.source_tier = 2;
   rec.ok = !!(rec.name || rec.images.length || rec.description);
-  rec.attempts = 1;
+  rec.attempts = attempts;
   rec.elapsed_ms = Date.now() - t0;
   if (!rec.ok && !rec.error) {
-    rec.error = "no JSON-LD Product or OpenGraph metadata found";
+    rec.failure_kind = "empty";
+    rec.error = "No product or store metadata found on this page.";
   }
   return rec;
+}
+
+// ---------------------------------------------------------------------------
+// Store + homepage helpers
+// ---------------------------------------------------------------------------
+
+function isHomepageUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/+$/, "");
+    if (path === "" || path === "/") return true;
+    // Salla/Zid storefront landings often look like /en-sa or /ar without a product segment
+    if (/^\/(en|ar)(-[a-z]{2})?$/i.test(path)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function hostnameLabel(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function extractStoreInfo(
+  blobs: unknown[],
+): { name: string | null; description: string | null; logo: string | null } | null {
+  const STORE_TYPES = new Set([
+    "Organization",
+    "Store",
+    "OnlineStore",
+    "LocalBusiness",
+    "WebSite",
+  ]);
+  for (const b of blobs) {
+    for (const obj of walk(b)) {
+      const t = obj["@type"];
+      const matches =
+        (typeof t === "string" && STORE_TYPES.has(t)) ||
+        (Array.isArray(t) && t.some((x) => typeof x === "string" && STORE_TYPES.has(x)));
+      if (!matches) continue;
+      // Logo can be a string OR an ImageObject {url}.
+      let logo: string | null = null;
+      const rawLogo = obj.logo;
+      if (typeof rawLogo === "string") logo = rawLogo;
+      else if (rawLogo && typeof rawLogo === "object") {
+        logo = asString((rawLogo as Record<string, unknown>).url);
+      }
+      return {
+        name: asString(obj.name),
+        description: asString(obj.description),
+        logo,
+      };
+    }
+  }
+  return null;
 }

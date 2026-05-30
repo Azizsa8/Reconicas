@@ -3,6 +3,7 @@
 // can offer All / Active / Paused filtering.
 
 import { getServerSupabase } from "@/lib/supabase/server";
+import { getActiveTenant } from "@/lib/tenant";
 import type { TrackTableRowData } from "@/components/ui/TrackTableRow";
 import type { Status } from "@/components/ui/StatusDot";
 
@@ -41,13 +42,7 @@ type ScrapeRow = {
 
 export async function getTracksList(): Promise<TracksListData> {
   const supabase = await getServerSupabase();
-  let tenant: { id: string } | null = null;
-  try {
-    const r = await supabase.from("tenants").select("id").limit(1).maybeSingle();
-    tenant = r.data ?? null;
-  } catch {
-    return EMPTY;
-  }
+  const tenant = await getActiveTenant().catch(() => null);
   if (!tenant) return EMPTY;
 
   const { data: tracksRaw } = await supabase

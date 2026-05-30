@@ -3,6 +3,7 @@
 // and invoices come back empty for now.
 
 import { getServerSupabase } from "@/lib/supabase/server";
+import { getActiveTenant } from "@/lib/tenant";
 
 export type BillingUsage = {
   plan: {
@@ -40,7 +41,7 @@ export async function getBillingUsage(): Promise<BillingUsage> {
     },
   };
 
-  const { data: tenant } = await supabase.from("tenants").select("id").limit(1).maybeSingle();
+  const tenant = await getActiveTenant().catch(() => null);
   if (!tenant) return empty;
 
   const { data: tracks } = await supabase

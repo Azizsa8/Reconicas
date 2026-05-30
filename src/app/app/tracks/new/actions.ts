@@ -2,10 +2,12 @@
 
 import { redirect } from "next/navigation";
 import { getServerSupabase } from "@/lib/supabase/server";
+import { getActiveTenant } from "@/lib/tenant";
+import { canonicalizeUrl } from "@/lib/url";
 
 export type AddTrackResult =
   | { ok: true; track_id: number }
-  | { ok: false; error: string };
+  | { ok: false; error: string; existing_track_id?: number };
 
 export async function addTrackAction(input: {
   url: string;
@@ -21,8 +23,27 @@ export async function addTrackAction(input: {
   const url = (input.url || "").trim();
   if (!/^https?:\/\//.test(url)) return { ok: false, error: "Invalid URL." };
 
-  const { data: tenant } = await supabase.from("tenants").select("id").limit(1).maybeSingle();
+  const tenant = await getActiveTenant();
   if (!tenant) return { ok: false, error: "No workspace found." };
+
+  // Dedup check: pull all the tenant's existing tracks and compare in
+  // canonical form. Small N (≤25 per Starter plan) so an in-memory scan is
+  // simpler than building a generated-column index in Postgres.
+  const canonical = canonicalizeUrl(url);
+  const { data: existing } = await supabase
+    .from("tracks")
+    .select("id, url, enabled")
+    .eq("tenant_id", tenant.id);
+  const match = (existing ?? []).find((t) => canonicalizeUrl(t.url) === canonical);
+  if (match) {
+    return {
+      ok: false,
+      error: match.enabled
+        ? "You're already tracking this URL. Open the existing track instead."
+        : "You had this URL tracked before — it's paused. Re-enable it from the existing track page.",
+      existing_track_id: match.id,
+    };
+  }
 
   const { data: track, error: e1 } = await supabase
     .from("tracks")
@@ -34,7 +55,26 @@ export async function addTrackAction(input: {
     })
     .select("id")
     .single();
-  if (e1 || !track) return { ok: false, error: e1?.message || "Could not save track." };
+  if (e1 || !track) {
+    // Postgres 23505 = unique_violation. Race-window fallback when two
+    // submissions slip past the app-level dedup and the DB constraint
+    // catches the second one. Look up the winner so the UI can still
+    // surface the "Open existing →" affordance.
+    if (e1?.code === "23505") {
+      const { data: winner } = await supabase
+        .from("tracks")
+        .select("id")
+        .eq("tenant_id", tenant.id)
+        .eq("url", url)
+        .maybeSingle();
+      return {
+        ok: false,
+        error: "You're already tracking this URL. Open the existing track instead.",
+        existing_track_id: winner?.id,
+      };
+    }
+    return { ok: false, error: e1?.message || "Could not save track." };
+  }
 
   if (input.expression) {
     await supabase.from("conditions").insert({

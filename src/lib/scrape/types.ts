@@ -29,6 +29,16 @@ export type ScrapeRecord = {
   stock_quantity: number | null;
 
   platform_detected: string;     // "salla" | "zid" | "noon" | "shopify" | "unknown" | ...
+  page_kind: "product" | "store" | "unknown";
+  store_name: string | null;     // populated when page_kind === "store"
+  // failure_kind narrows what went wrong so the UI can give an actionable hint:
+  //   "timeout"  → ran past our budget (slow target)
+  //   "blocked"  → HTTP 4xx (often Cloudflare/anti-bot)
+  //   "network"  → DNS/TLS/connection level failure
+  //   "refused"  → we refused to fetch (SSRF guard — private/loopback IP)
+  //   "empty"    → fetched fine but no product or store metadata found
+  //   null       → ok || no failure or success
+  failure_kind: "timeout" | "blocked" | "network" | "refused" | "empty" | null;
   elapsed_ms: number;
 };
 
@@ -47,6 +57,9 @@ export function emptyRecord(url: string): ScrapeRecord {
     rating: null, rating_max: null, review_count: null,
     images: [], stock_quantity: null,
     platform_detected: "unknown",
+    page_kind: "unknown",
+    store_name: null,
+    failure_kind: null,
     elapsed_ms: 0,
   };
 }

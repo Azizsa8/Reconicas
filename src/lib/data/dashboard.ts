@@ -3,6 +3,7 @@
 // before the schema is fully populated.
 
 import { getServerSupabase } from "@/lib/supabase/server";
+import { getActiveTenant } from "@/lib/tenant";
 import type { AlertRowData } from "@/components/ui/AlertRow";
 import type { MovementData } from "@/components/ui/MovementRow";
 import type { TrackTableRowData } from "@/components/ui/TrackTableRow";
@@ -74,17 +75,7 @@ type ScrapeRow = {
 export async function getDashboard(): Promise<DashboardData> {
   const supabase = await getServerSupabase();
 
-  let tenant: { id: string; display_name: string } | null = null;
-  try {
-    const r = await supabase
-      .from("tenants")
-      .select("id, display_name")
-      .limit(1)
-      .maybeSingle();
-    tenant = r.data ?? null;
-  } catch {
-    return EMPTY;
-  }
+  const tenant = await getActiveTenant().catch(() => null);
   if (!tenant) return EMPTY;
 
   // --- tracks for this tenant ---

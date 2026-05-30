@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { getServerSupabase } from "@/lib/supabase/server";
 import { getSidebarCounts } from "@/lib/data/sidebar";
+import { listMyTenants, getActiveTenant } from "@/lib/tenant";
 import { logoutAction } from "../(auth)/actions";
 import { Sidebar } from "./_components/Sidebar";
 import { TopBar } from "./_components/TopBar";
@@ -20,7 +21,32 @@ export default async function AppLayout({
   if (!user) redirect("/login");
 
   const email = user.email || "";
-  const counts = await getSidebarCounts();
+  // First load after email confirmation: provisioning was deferred from
+  // signup because there was no session yet. Provision the tenant now.
+  // Idempotent: if user already has memberships, the RPC is skipped.
+  let tenants = await listMyTenants();
+  if (tenants.length === 0) {
+    const meta = (user.user_metadata ?? {}) as { workspace_display_name?: string };
+    const workspaceName =
+      (meta.workspace_display_name ?? "").trim() ||
+      email.split("@")[0] ||
+      "Workspace";
+    const slug = `ws-${user.id.slice(0, 8)}`;
+    try {
+      await supabase.rpc("create_tenant_for_current_user", {
+        p_slug: slug,
+        p_display_name: workspaceName,
+      });
+      tenants = await listMyTenants();
+    } catch {
+      // RPC unavailable / duplicate slug. Leave tenants empty — empty-state
+      // UI in /app will render an actionable message.
+    }
+  }
+  const [counts, activeTenant] = await Promise.all([
+    getSidebarCounts(),
+    getActiveTenant(),
+  ]);
 
   return (
     <div className="flex min-h-screen bg-[var(--bg-canvas)] text-[var(--fg-primary)]">
@@ -34,7 +60,8 @@ export default async function AppLayout({
           <span className="font-semibold text-[15px]">ReconCart</span>
         </Link>
         <Sidebar
-          tenantName={counts.tenant_name}
+          tenants={tenants.map(({ id, display_name }) => ({ id, display_name }))}
+          activeTenantId={activeTenant?.id ?? null}
           counts={{ tracks: counts.tracks, unread_alerts: counts.unread_alerts }}
           plan={{
             name: counts.plan_name,

@@ -21,10 +21,13 @@ import { KpiCard } from "@/components/ui/KpiCard";
 import { AlertRow } from "@/components/ui/AlertRow";
 import { MovementRow } from "@/components/ui/MovementRow";
 import { TrackTableRow } from "@/components/ui/TrackTableRow";
+import { AutoRefresh } from "@/components/AutoRefresh";
 import { getDashboard } from "@/lib/data/dashboard";
 import { relativeTime } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
+
+const REFRESH_MS = 30_000;
 
 export default async function DashboardPage() {
   const d = await getDashboard();
@@ -42,6 +45,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="px-6 py-5 space-y-5 max-w-[1400px]">
+      <AutoRefresh intervalMs={REFRESH_MS} />
       {/* Page header */}
       <header className="flex items-start justify-between gap-4 flex-wrap">
         <div>
