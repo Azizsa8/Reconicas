@@ -1,25 +1,30 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   Bell,
   Building,
   Check,
+  Download,
   Key,
   Loader2,
   Mail,
   Shield,
+  Trash2,
   User,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { initials } from "@/lib/format";
 import {
+  deleteAccountAction,
   sendPasswordResetAction,
   updateProfileAction,
   updateWorkspaceAction,
 } from "./_actions";
 
-type Tab = "profile" | "workspace" | "api" | "notifications" | "security";
+type Tab = "profile" | "workspace" | "data" | "api" | "notifications" | "security";
 
 export function SettingsPanels({
   initial,
@@ -41,6 +46,9 @@ export function SettingsPanels({
         <TabButton tab="workspace" current={tab} onSelect={setTab} icon={<Building size={14} />}>
           Workspace
         </TabButton>
+        <TabButton tab="data" current={tab} onSelect={setTab} icon={<Download size={14} />}>
+          Data
+        </TabButton>
         <TabButton tab="api" current={tab} onSelect={setTab} icon={<Key size={14} />}>
           API keys
         </TabButton>
@@ -57,10 +65,109 @@ export function SettingsPanels({
           <ProfilePanel email={initial.email} display_name={initial.display_name} />
         )}
         {tab === "workspace" && <WorkspacePanel tenant={initial.tenant} />}
+        {tab === "data" && <DataPanel email={initial.email} />}
         {tab === "api" && <ComingSoonPanel title="API keys" />}
         {tab === "notifications" && <ComingSoonPanel title="Notifications" />}
         {tab === "security" && <SecurityPanel email={initial.email} />}
       </div>
+    </div>
+  );
+}
+
+function DataPanel({ email }: { email: string }) {
+  const router = useRouter();
+  const [confirmText, setConfirmText] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, start] = useTransition();
+
+  const canDelete = confirmText === "DELETE";
+
+  function onDelete() {
+    if (!canDelete) return;
+    setError(null);
+    start(async () => {
+      const r = await deleteAccountAction({ confirm: confirmText });
+      if (!r.ok) {
+        setError(r.error ?? "Could not delete account.");
+        return;
+      }
+      // Hard refresh to /login so cookies clear and we don't stay rendered
+      // with stale session data in client memory.
+      window.location.href = "/login?deleted=1";
+    });
+  }
+
+  return (
+    <div className="space-y-4">
+      <PanelCard
+        title="Export your data"
+        desc="Download a JSON file with everything you have in ReconCart: tenants, tracks, scrapes, alerts, channels, deliveries. Signing secrets are redacted."
+      >
+        <a
+          href="/api/me/export"
+          download
+          className="btn btn-secondary inline-flex"
+        >
+          <Download size={14} />
+          Download JSON
+        </a>
+        <p className="mt-3 text-[12px] text-[var(--fg-muted)]">
+          Triggered as you — only data your account can see is included. Large
+          tenants may take a few seconds; the browser shows progress.
+        </p>
+      </PanelCard>
+
+      <PanelCard
+        title="Delete your account"
+        desc="Permanently remove your account, every tenant you own, and all of their tracks, scrapes, alerts, channels, and delivery history. This cannot be undone."
+      >
+        <div className="rounded-lg border border-[var(--danger)]/40 bg-[var(--danger)]/6 p-4">
+          <div className="flex gap-3">
+            <AlertTriangle
+              size={16}
+              className="text-[var(--danger)] flex-shrink-0 mt-0.5"
+              aria-hidden="true"
+            />
+            <div className="flex-1 min-w-0">
+              <div className="font-medium text-[14px] text-[var(--danger)]">
+                Permanent deletion
+              </div>
+              <p className="text-[12px] text-[var(--fg-muted)] mt-1 leading-relaxed">
+                Account <span dir="ltr" className="font-mono">{email}</span> will
+                be removed from authentication. Cascading deletes will remove
+                every tenant you own and all derived data. We do not keep a
+                backup of your account once this completes.
+              </p>
+              <div className="mt-3">
+                <label htmlFor="delete-confirm" className="label text-[12px]">
+                  Type <span className="font-mono">DELETE</span> to confirm
+                </label>
+                <input
+                  id="delete-confirm"
+                  type="text"
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  className="input text-[13px] font-mono max-w-[200px]"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+              {error && (
+                <div className="mt-2 helper-error">{error}</div>
+              )}
+              <button
+                type="button"
+                onClick={onDelete}
+                disabled={!canDelete || busy}
+                className="btn mt-3 inline-flex items-center gap-1.5 bg-[var(--danger)] text-white hover:bg-[var(--danger)]/90 disabled:opacity-40 disabled:cursor-not-allowed px-3 py-2 rounded-lg text-[13px] font-medium"
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                Delete my account permanently
+              </button>
+            </div>
+          </div>
+        </div>
+      </PanelCard>
     </div>
   );
 }
