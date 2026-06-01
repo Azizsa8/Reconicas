@@ -11,7 +11,7 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 
 export async function GET() {
-  const server = process.env.NEXT_PUBLIC_SITE_URL || "https://reconcart.vercel.app";
+  const server = (process.env.NEXT_PUBLIC_SITE_URL || "https://reconcart.vercel.app").trim().replace(/\/+$/, "");
   const spec = {
     openapi: "3.1.0",
     info: {
