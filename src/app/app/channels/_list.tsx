@@ -6,6 +6,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Filter,
   KeyRound,
   Loader2,
   Mail,
@@ -27,8 +28,17 @@ import {
   rotateSigningSecretAction,
   setChannelEnabledAction,
   testChannelAction,
+  updateChannelFilterAction,
   type ChannelKind,
 } from "./_actions";
+
+type OnlyWhen = "any" | "in_stock" | "out_of_stock";
+type ChannelConfig = {
+  alert_filter?: {
+    condition_ids?: number[];
+    only_when?: OnlyWhen;
+  };
+};
 
 export type ChannelRow = {
   id: number;
@@ -37,6 +47,16 @@ export type ChannelRow = {
   label: string | null;
   enabled: boolean;
   created_at: string;
+  config: ChannelConfig | null;
+};
+
+export type ConditionOption = {
+  id: number;
+  expression: string;
+  label: string | null;
+  enabled: boolean;
+  track_id: number;
+  track_url: string;
 };
 
 // Copy-pasteable verification recipes for integrators. Both use a
@@ -80,7 +100,13 @@ def verify_reconcart_webhook(raw_body: bytes, sig_header: str) -> bool:
     ).hexdigest()
     return hmac.compare_digest(expected, parts["v1"])`;
 
-export function ChannelsList({ channels }: { channels: ChannelRow[] }) {
+export function ChannelsList({
+  channels,
+  conditions,
+}: {
+  channels: ChannelRow[];
+  conditions: ConditionOption[];
+}) {
   const [adding, setAdding] = useState(false);
 
   return (
@@ -116,7 +142,7 @@ export function ChannelsList({ channels }: { channels: ChannelRow[] }) {
       ) : (
         <ul className="space-y-3">
           {channels.map((c) => (
-            <ChannelCard key={c.id} channel={c} />
+            <ChannelCard key={c.id} channel={c} conditions={conditions} />
           ))}
         </ul>
       )}
@@ -126,7 +152,13 @@ export function ChannelsList({ channels }: { channels: ChannelRow[] }) {
   );
 }
 
-function ChannelCard({ channel }: { channel: ChannelRow }) {
+function ChannelCard({
+  channel,
+  conditions,
+}: {
+  channel: ChannelRow;
+  conditions: ConditionOption[];
+}) {
   const [busy, startBusy] = useTransition();
   const [testResult, setTestResult] = useState<{ ok: boolean; detail?: string; error?: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -135,6 +167,7 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
   const [secretCopied, setSecretCopied] = useState(false);
   const [rotateConfirm, setRotateConfirm] = useState(false);
   const [rotateSuccess, setRotateSuccess] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
 
   function onTest() {
     setTestResult(null);
@@ -327,6 +360,15 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
               </details>
             </div>
           )}
+
+          {filterOpen && (
+            <FilterPanel
+              channelId={channel.id}
+              initialConfig={channel.config}
+              conditions={conditions}
+              onClose={() => setFilterOpen(false)}
+            />
+          )}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <button
@@ -352,6 +394,23 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
           )}
           <button
             type="button"
+            onClick={() => setFilterOpen((v) => !v)}
+            disabled={busy}
+            className={cn(
+              "btn btn-secondary !py-1.5 !text-[12px]",
+              hasFilter(channel.config) && "text-[var(--accent)] border-[var(--accent)]/40",
+            )}
+            title={hasFilter(channel.config) ? "Edit alert filter (active)" : "Add alert filter"}
+            aria-expanded={filterOpen}
+          >
+            <Filter size={12} />
+            Filter
+            {hasFilter(channel.config) && (
+              <span className="ms-1 inline-block w-1.5 h-1.5 rounded-full bg-[var(--accent)]" aria-hidden />
+            )}
+          </button>
+          <button
+            type="button"
             onClick={onTogglePause}
             disabled={busy}
             className="btn btn-secondary !py-1.5 !text-[12px]"
@@ -372,6 +431,270 @@ function ChannelCard({ channel }: { channel: ChannelRow }) {
         </div>
       </div>
     </li>
+  );
+}
+
+function hasFilter(config: ChannelConfig | null): boolean {
+  const f = config?.alert_filter;
+  if (!f) return false;
+  if (f.only_when && f.only_when !== "any") return true;
+  if (f.condition_ids && f.condition_ids.length > 0) return true;
+  return false;
+}
+
+function FilterPanel({
+  channelId,
+  initialConfig,
+  conditions,
+  onClose,
+}: {
+  channelId: number;
+  initialConfig: ChannelConfig | null;
+  conditions: ConditionOption[];
+  onClose: () => void;
+}) {
+  const initialFilter = initialConfig?.alert_filter ?? {};
+  // Mode: "all" = no per-condition restriction (backend stores no condition_ids);
+  // "selected" = only the picked condition IDs fire on this channel. The
+  // explicit toggle keeps users from accidentally re-enabling everything by
+  // unchecking the last condition.
+  const initialIds = initialFilter.condition_ids ?? [];
+  const [mode, setMode] = useState<"all" | "selected">(initialIds.length > 0 ? "selected" : "all");
+  const [picked, setPicked] = useState<Set<number>>(new Set(initialIds));
+  const [onlyWhen, setOnlyWhen] = useState<OnlyWhen>(initialFilter.only_when ?? "any");
+  const [busy, startBusy] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  // Group conditions by their parent track URL so the picker stays scannable
+  // when a tenant has many tracks. Preserves the server's deterministic order.
+  const grouped: Array<{ track_id: number; track_url: string; items: ConditionOption[] }> = [];
+  for (const c of conditions) {
+    let g = grouped.find((x) => x.track_id === c.track_id);
+    if (!g) {
+      g = { track_id: c.track_id, track_url: c.track_url, items: [] };
+      grouped.push(g);
+    }
+    g.items.push(c);
+  }
+
+  function togglePick(id: number) {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    setSaved(false);
+  }
+
+  function onSave() {
+    setError(null);
+    setSaved(false);
+    const filter =
+      mode === "all" && onlyWhen === "any"
+        ? null
+        : {
+            only_when: onlyWhen,
+            condition_ids: mode === "selected" ? Array.from(picked) : [],
+          };
+    startBusy(async () => {
+      const r = await updateChannelFilterAction({ channel_id: channelId, filter });
+      if (r.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2500);
+      } else {
+        setError(r.error);
+      }
+    });
+  }
+
+  function onClear() {
+    setMode("all");
+    setPicked(new Set());
+    setOnlyWhen("any");
+    setError(null);
+    startBusy(async () => {
+      const r = await updateChannelFilterAction({ channel_id: channelId, filter: null });
+      if (r.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2500);
+      } else {
+        setError(r.error);
+      }
+    });
+  }
+
+  const selectedCount = mode === "selected" ? picked.size : conditions.length;
+  const willBeEmpty = mode === "selected" && picked.size === 0;
+
+  return (
+    <div className="mt-2 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)]/40 p-3">
+      <div className="flex items-center gap-2 mb-2">
+        <Filter size={12} className="text-[var(--fg-muted)]" />
+        <span className="text-[11px] uppercase tracking-wide text-[var(--fg-muted)]">
+          Alert filter
+        </span>
+        <span className="text-[11px] text-[var(--fg-muted)]">
+          · {selectedCount} of {conditions.length} conditions ·{" "}
+          {onlyWhen === "any" ? "any stock state" : onlyWhen.replace("_", " ")}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="ms-auto p-1 rounded text-[var(--fg-muted)] hover:bg-[var(--bg-elevated)]"
+          aria-label="Close filter panel"
+        >
+          <X size={12} />
+        </button>
+      </div>
+
+      <fieldset className="mt-2">
+        <legend className="text-[11.5px] font-medium text-[var(--fg-muted)] mb-1.5">
+          Stock state
+        </legend>
+        <div className="flex gap-1 flex-wrap">
+          {(["any", "in_stock", "out_of_stock"] as OnlyWhen[]).map((v) => (
+            <label
+              key={v}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-2.5 py-1 rounded border text-[12px] cursor-pointer",
+                onlyWhen === v
+                  ? "border-[var(--accent)]/50 bg-[var(--accent)]/10 text-[var(--accent)]"
+                  : "border-[var(--border)] text-[var(--fg-muted)] hover:text-[var(--fg-primary)]",
+              )}
+            >
+              <input
+                type="radio"
+                name={`only_when_${channelId}`}
+                className="sr-only"
+                checked={onlyWhen === v}
+                onChange={() => {
+                  setOnlyWhen(v);
+                  setSaved(false);
+                }}
+              />
+              {v === "any" ? "Any" : v === "in_stock" ? "In stock only" : "Out of stock only"}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      <fieldset className="mt-3">
+        <legend className="text-[11.5px] font-medium text-[var(--fg-muted)] mb-1.5">
+          Conditions
+        </legend>
+        <div className="flex gap-1 flex-wrap mb-2">
+          {(["all", "selected"] as const).map((m) => (
+            <label
+              key={m}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-2.5 py-1 rounded border text-[12px] cursor-pointer",
+                mode === m
+                  ? "border-[var(--accent)]/50 bg-[var(--accent)]/10 text-[var(--accent)]"
+                  : "border-[var(--border)] text-[var(--fg-muted)] hover:text-[var(--fg-primary)]",
+              )}
+            >
+              <input
+                type="radio"
+                name={`mode_${channelId}`}
+                className="sr-only"
+                checked={mode === m}
+                onChange={() => {
+                  setMode(m);
+                  setSaved(false);
+                }}
+              />
+              {m === "all" ? "All conditions" : "Only selected"}
+            </label>
+          ))}
+        </div>
+
+        {mode === "selected" && (
+          <div className="rounded border border-[var(--border)] bg-[var(--bg-surface)] max-h-[260px] overflow-y-auto">
+            {grouped.length === 0 ? (
+              <p className="text-[12px] text-[var(--fg-muted)] p-3">
+                No conditions defined yet. Add one on a track to filter by it.
+              </p>
+            ) : (
+              grouped.map((g) => (
+                <div key={g.track_id} className="border-b border-[var(--border)] last:border-b-0">
+                  <div
+                    dir="ltr"
+                    className="px-3 py-1.5 text-[11px] font-mono text-[var(--fg-muted)] bg-[var(--bg-elevated)]/40 truncate"
+                    title={g.track_url}
+                  >
+                    {g.track_url}
+                  </div>
+                  {g.items.map((c) => (
+                    <label
+                      key={c.id}
+                      className="flex items-start gap-2 px-3 py-2 text-[12.5px] cursor-pointer hover:bg-[var(--bg-elevated)]/30"
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={picked.has(c.id)}
+                        onChange={() => togglePick(c.id)}
+                      />
+                      <span className="flex-1 min-w-0">
+                        <span className="block truncate">
+                          {c.label || <span className="font-mono">{c.expression}</span>}
+                        </span>
+                        {c.label && (
+                          <span className="block font-mono text-[11px] text-[var(--fg-muted)] truncate">
+                            {c.expression}
+                          </span>
+                        )}
+                      </span>
+                      {!c.enabled && (
+                        <span className="text-[10.5px] px-1.5 py-0.5 rounded border border-[var(--border)] text-[var(--fg-muted)]">
+                          disabled
+                        </span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </fieldset>
+
+      {willBeEmpty && (
+        <p className="mt-2 text-[11.5px] text-[var(--warning)]">
+          No conditions selected — this channel will not receive any alerts until
+          you pick at least one, or switch to &ldquo;All conditions&rdquo;.
+        </p>
+      )}
+      {error && <p className="mt-2 text-[11.5px] text-[var(--danger)]">{error}</p>}
+
+      <div className="mt-3 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={busy}
+          className="btn btn-primary !py-1.5 !text-[12px]"
+        >
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={onClear}
+          disabled={busy || !hasFilter(initialConfig)}
+          className="btn btn-secondary !py-1.5 !text-[12px]"
+          title="Clear filter — channel receives every alert again"
+        >
+          Clear
+        </button>
+        {saved && (
+          <span className="text-[11.5px] text-[var(--success)] inline-flex items-center gap-1">
+            <Check size={11} /> Saved
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 

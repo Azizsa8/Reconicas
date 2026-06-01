@@ -1,21 +1,49 @@
 // Delivery channels — PRD-08.
 import { getServerSupabase } from "@/lib/supabase/server";
 import { getActiveTenant } from "@/lib/tenant";
-import { ChannelsList, type ChannelRow } from "./_list";
+import { ChannelsList, type ChannelRow, type ConditionOption } from "./_list";
 
 export const dynamic = "force-dynamic";
 
 export default async function ChannelsPage() {
   const supabase = await getServerSupabase();
   const tenant = await getActiveTenant();
-  const { data } = tenant
-    ? await supabase
-        .from("delivery_channels")
-        .select("id, kind, target, label, enabled, created_at")
-        .eq("tenant_id", tenant.id)
-        .order("created_at", { ascending: false })
-    : { data: [] };
-  const channels = (data ?? []) as ChannelRow[];
+
+  const [{ data: channelData }, { data: conditionData }] = tenant
+    ? await Promise.all([
+        supabase
+          .from("delivery_channels")
+          .select("id, kind, target, label, enabled, created_at, config")
+          .eq("tenant_id", tenant.id)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("conditions")
+          .select("id, expression, label, enabled, tracks!inner(id, url, tenant_id)")
+          .eq("tracks.tenant_id", tenant.id)
+          .order("id", { ascending: true }),
+      ])
+    : [{ data: [] }, { data: [] }];
+
+  const channels = (channelData ?? []) as ChannelRow[];
+  const conditions: ConditionOption[] = (conditionData ?? []).map((c: {
+    id: number;
+    expression: string;
+    label: string | null;
+    enabled: boolean;
+    tracks: { id: number; url: string } | { id: number; url: string }[];
+  }) => {
+    // Supabase types the relation as array | object depending on inference;
+    // !inner gives us a single parent, but we narrow defensively.
+    const track = Array.isArray(c.tracks) ? c.tracks[0] : c.tracks;
+    return {
+      id: c.id,
+      expression: c.expression,
+      label: c.label,
+      enabled: c.enabled,
+      track_id: track.id,
+      track_url: track.url,
+    };
+  });
 
   return (
     <div className="px-6 py-5 max-w-[1100px]">
@@ -26,7 +54,7 @@ export default async function ChannelsPage() {
         </p>
       </header>
 
-      <ChannelsList channels={channels} />
+      <ChannelsList channels={channels} conditions={conditions} />
     </div>
   );
 }
