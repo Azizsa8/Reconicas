@@ -14,14 +14,20 @@ export default function HomePage() {
             Paste a competitor&apos;s product URL. We watch the price, stock, and
             reviews. You get pinged when something moves.
           </p>
-          <div className="flex gap-3 justify-center">
+          <div className="flex gap-3 justify-center flex-wrap">
             <Link href="/signup" className="btn btn-primary btn-lg">
               Start free — 3 tracks
             </Link>
-            <Link href="/login" className="btn btn-secondary btn-lg">
-              Sign in
+            <Link href="/demo" className="btn btn-secondary btn-lg">
+              See live demo →
             </Link>
           </div>
+          <p className="mt-3 text-xs text-[var(--fg-muted)]">
+            No signup needed for the demo · already have an account?{" "}
+            <Link href="/login" className="text-[var(--accent)] hover:underline">
+              Sign in
+            </Link>
+          </p>
           <p className="mt-10 text-xs text-[var(--fg-muted)]">
             Built for Salla, Zid, Noon, and global Shopify stores.
           </p>
