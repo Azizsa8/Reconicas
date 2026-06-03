@@ -122,7 +122,7 @@ const CHECKS = [
       checkJson("/api/openapi.json", (res, body) => {
         if (!res.ok || !body) return { ok: false, detail: `HTTP ${res.status}` };
         const paths = body.paths ? Object.keys(body.paths) : [];
-        const expected = ["/v1/tracks", "/v1/alerts", "/v1/channels"];
+        const expected = ["/api/v1/tracks", "/api/v1/alerts", "/api/v1/channels"];
         const missing = expected.filter((p) => !paths.includes(p));
         return {
           ok: missing.length === 0,
