@@ -23,6 +23,8 @@ import { MovementRow } from "@/components/ui/MovementRow";
 import { TrackTableRow } from "@/components/ui/TrackTableRow";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { getDashboard } from "@/lib/data/dashboard";
+import { getOnboardingCounts } from "@/lib/data/onboarding";
+import { OnboardingChecklist } from "./_components/OnboardingChecklist";
 import { relativeTime } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +32,10 @@ export const dynamic = "force-dynamic";
 const REFRESH_MS = 30_000;
 
 export default async function DashboardPage() {
-  const d = await getDashboard();
+  const [d, onboarding] = await Promise.all([
+    getDashboard(),
+    getOnboardingCounts(),
+  ]);
   const planPct =
     d.kpis.plan_max_tracks > 0
       ? Math.min(100, Math.round((d.kpis.tracks / d.kpis.plan_max_tracks) * 100))
@@ -133,6 +138,7 @@ export default async function DashboardPage() {
       </section>
 
       {isFirstTime && <FirstTimeBanner />}
+      {!isFirstTime && <OnboardingChecklist counts={onboarding} />}
 
       {/* Two-column grid: Recent alerts | Today's movement */}
       <section className="grid lg:grid-cols-5 gap-4">

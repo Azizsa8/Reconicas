@@ -10,6 +10,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { ArrowLeft, Eye, Bell, Webhook, Lock, ShieldCheck, Languages } from "lucide-react";
+import { LeadForm, DEFAULT_AR_COPY } from "@/components/LeadForm";
 
 const SITE = (process.env.NEXT_PUBLIC_SITE_URL || "https://reconcart.vercel.app")
   .trim()
@@ -159,6 +160,12 @@ export default function ArLandingPage() {
             <ArrowLeft size={13} />
             اقرأ نظرة الأمان
           </Link>
+        </div>
+      </section>
+
+      <section className="px-4 pb-20">
+        <div className="max-w-[560px] mx-auto">
+          <LeadForm copy={DEFAULT_AR_COPY} source="landing-ar" />
         </div>
       </section>
 

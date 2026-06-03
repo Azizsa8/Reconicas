@@ -6,6 +6,7 @@
 // section above the demo CTA delays conversion.
 import Link from "next/link";
 import { ArrowRight, Eye, Bell, Webhook, Lock, ShieldCheck, Languages } from "lucide-react";
+import { LeadForm } from "@/components/LeadForm";
 
 const PLATFORMS = ["Salla", "Zid", "Noon", "Amazon.sa", "Shopify"];
 
@@ -136,6 +137,13 @@ export default function HomePage() {
           <Link href="/security" className="text-[13px] font-medium text-[var(--accent)] hover:underline inline-flex items-center gap-1">
             Read the security overview <ArrowRight size={13} />
           </Link>
+        </div>
+      </section>
+
+      {/* Talk-to-us — captures leads from sales conversations */}
+      <section className="px-4 pb-20">
+        <div className="max-w-[560px] mx-auto">
+          <LeadForm source="landing" />
         </div>
       </section>
 

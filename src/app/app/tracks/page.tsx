@@ -2,7 +2,7 @@
 // Server fetches rows (both active + paused); client component handles
 // filtering, search, quick chips, and sort.
 import Link from "next/link";
-import { Plus, Clock } from "lucide-react";
+import { Plus, Clock, Download } from "lucide-react";
 import { getTracksList } from "@/lib/data/tracks";
 import { getSidebarCounts } from "@/lib/data/sidebar";
 import { relativeTime } from "@/lib/format";
@@ -30,6 +30,15 @@ export default async function TracksListPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <a
+            href="/api/me/export/tracks.csv"
+            className={`btn btn-secondary ${data.rows.length === 0 ? "opacity-50 pointer-events-none" : ""}`}
+            title={data.rows.length === 0 ? "Add a track first" : "Download all tracks with their latest scrape as CSV"}
+            aria-disabled={data.rows.length === 0}
+          >
+            <Download size={14} />
+            Export
+          </a>
           <Link
             href="/app/tracks/import"
             aria-disabled={planLimitHit}
